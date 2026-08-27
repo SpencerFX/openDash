@@ -1,0 +1,19 @@
+{
+  "name": "openq-dashboard-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Node.js API/WebSocket gateway between the openQ dashboard and the openQ kdb+ gateway process, over q IPC (jkdb).",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "smoke": "node scripts/smoke.js"
+  },
+  "dependencies": {
+    "jkdb": "file:../../jkdb",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
