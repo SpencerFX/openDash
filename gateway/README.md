@@ -149,6 +149,32 @@ lines, stack frames) are folded into the preceding row's `message`. The
 dashboard's **Logs** page renders this table (level/process/text filters,
 auto-refresh).
 
+### `GET /api/markout`
+
+Deal markout + order impact decay curves read live off the markout module's
+CEP. No parameters. Enabled only when `OPENQ_MARKOUT_CEP` is set. See
+"Markout" below for the response shape.
+
+### `GET /api/tables`
+
+In-memory table inventory across every configured openQ process (one RDB per
+pipeline by default — see `OPENQ_TABLE_SOURCES`). Per source: `connected`,
+process name/role, and per table `rows`, `columns`, `bytes` (`-22!`), and
+`lastTs` (newest `timestamp` value). Plus `totals`. No parameters. The
+dashboard's **Tables** page renders it grouped by pipeline with a
+live/recent/idle/empty/offline status per table.
+
+```json
+{
+  "sources": [
+    { "name": "markout", "process": "markout_rdb", "role": "rdb", "target": "127.0.0.1:5031",
+      "connected": true,
+      "tables": [ { "table": "rate", "rows": 688, "columns": 3, "bytes": 15883, "lastTs": "2026-...Z" } ] }
+  ],
+  "totals": { "sources": 7, "online": 7, "tables": 19, "rows": 3286, "bytes": 642834 }
+}
+```
+
 ## WebSocket API — `ws://<host>:<PORT>/stream`
 
 Enabled only when `OPENQ_STREAM_PORT` is set. One shared `.u.sub` connection to
@@ -171,6 +197,36 @@ Server → client:
 { "type": "tick",        "table": "trade", "columns": [...], "rows": [ { "...": "row" } ] }
 { "type": "error",       "message": "..." }
 { "type": "pong" }
+```
+
+## Markout (the dashboard's Markout page)
+
+openQ's **markout** module CEP loads `analytics/markOutImpact.q` and keeps deal
+markout / order impact in in-memory keyed tables (`.markout.completed`,
+`.impact.completed`) that aren't published downstream. `GET /api/markout` reads
+them straight off the CEP over a plain jkdb sync connection and returns the two
+decay curves + a peak/permanent-impact split.
+
+```bash
+Q_BIN=/path/to/q bash ../../openQ/scripts/startupAllByModule.sh markout   # CEP on :5034
+node tools/markout-feeder.js                                              # correlated trade/order/rate
+OPENQ_MARKOUT_CEP=127.0.0.1:5034 npm start
+```
+
+`analytics/markOutImpact.q`'s grid runs to ±10 min, so the far ends of the
+markout curve only fill in after the feeder has run that long; near offsets
+fill within seconds, and the impact curve (−10s…+60s) within a minute.
+
+Response:
+
+```json
+{
+  "connected": true,
+  "summary": { "mkTrades": 71, "mkSamples": 3849, "imOrders": 52, "...": "..." },
+  "markout": { "curve": [ { "offsetSec": 1, "markoutBps": -0.13, "samples": 71, "trades": 71 } ] },
+  "impact":  { "curve": [ { "offsetSec": 5, "impactBps": -0.06, "...": "..." } ],
+               "peakBps": 0.09, "permanentBps": -0.41 }
+}
 ```
 
 ## Process monitoring (the dashboard's Processes page)
@@ -224,7 +280,10 @@ src/qshape.js        column-oriented q table → row objects; q value → JSON-s
 src/qGateway.js      the connection pool + async-reply correlation
 src/stream.js        .u.sub bridge → "tick" events
 src/logs.js          read + parse openQ's .log files for /api/logs
+src/markout.js       read the markout CEP's .markout/.impact state for /api/markout
+src/tables.js        survey each pipeline's RDB for the /api/tables inventory
 src/server.js        HTTP routes + WebSocket wiring
 scripts/smoke.js     one-shot query check
 tools/pidstat-feeder.js  Windows stand-in for modules/mon/pidstat_poller.py
+tools/markout-feeder.js  correlated trade/order/rate feed for the markout module
 ```

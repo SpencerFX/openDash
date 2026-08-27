@@ -127,6 +127,45 @@ const config = {
     user: str("OPENQ_STREAM_USER", ""),
     password: str("OPENQ_STREAM_PASSWORD", ""),
   },
+
+  // openQ processes to survey for /api/tables (in-memory table inventory).
+  //   OPENQ_TABLE_SOURCES="default=127.0.0.1:5011,mon=127.0.0.1:5021,..."
+  // default = one RDB per running pipeline.
+  tableSources: (function () {
+    const raw = str("OPENQ_TABLE_SOURCES", "");
+    const parse = (s) => {
+      const [name, hp] = s.split("=").map((x) => (x || "").trim());
+      if (!name || !hp) return null;
+      const [h, p] = hp.split(":");
+      return { name, host: h || "127.0.0.1", port: Number(p) || 0 };
+    };
+    if (raw) return raw.split(",").map(parse).filter((x) => x && x.port);
+    return [
+      { name: "default", host: "127.0.0.1", port: 5011 },
+      { name: "mon", host: "127.0.0.1", port: 5021 },
+      { name: "markout", host: "127.0.0.1", port: 5031 },
+      { name: "massive", host: "127.0.0.1", port: 5046 },
+      { name: "primefinance", host: "127.0.0.1", port: 5071 },
+      { name: "spread", host: "127.0.0.1", port: 5056 },
+      { name: "yfinance", host: "127.0.0.1", port: 5051 },
+    ];
+  })(),
+
+  // the markout module's CEP (modules/markout/cep.q) - holds the live
+  // .markout.completed / .impact.completed analytics state, read by /api/markout.
+  // OPENQ_MARKOUT_CEP="127.0.0.1:5034"; unset -> /api/markout disabled.
+  markout: (function () {
+    const hp = str("OPENQ_MARKOUT_CEP", "");
+    if (!hp) return { enabled: false };
+    const [h, p] = hp.split(":");
+    return {
+      enabled: true,
+      host: h || "127.0.0.1",
+      port: Number(p) || 5034,
+      user: str("OPENQ_MARKOUT_USER", ""),
+      password: str("OPENQ_MARKOUT_PASSWORD", ""),
+    };
+  })(),
 };
 
 module.exports = config;
