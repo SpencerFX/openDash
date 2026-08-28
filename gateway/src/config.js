@@ -56,6 +56,10 @@ function list(name) {
 
 const streamPort = int("OPENQ_STREAM_PORT", 0);
 
+// per-query timeout for the direct CEP / RDB sync reads (markout / spread /
+// prime / tables). Local aggregates, so shorter than the gw pool's.
+const cepTimeoutMs = Math.max(500, int("OPENQ_CEP_TIMEOUT_MS", 5000));
+
 const gwBase = {
   user: str("OPENQ_GW_USER", ""),
   password: str("OPENQ_GW_PASSWORD", ""),
@@ -154,18 +158,38 @@ const config = {
   // the markout module's CEP (modules/markout/cep.q) - holds the live
   // .markout.completed / .impact.completed analytics state, read by /api/markout.
   // OPENQ_MARKOUT_CEP="127.0.0.1:5034"; unset -> /api/markout disabled.
-  markout: (function () {
-    const hp = str("OPENQ_MARKOUT_CEP", "");
-    if (!hp) return { enabled: false };
-    const [h, p] = hp.split(":");
-    return {
-      enabled: true,
-      host: h || "127.0.0.1",
-      port: Number(p) || 5034,
-      user: str("OPENQ_MARKOUT_USER", ""),
-      password: str("OPENQ_MARKOUT_PASSWORD", ""),
-    };
-  })(),
+  markout: cepTarget("OPENQ_MARKOUT_CEP", 5034),
+
+  // the spread module's CEP (modules/spread/cep.q) - holds .spread.snap
+  // (build-up attribution), read by /api/spread.
+  // OPENQ_SPREAD_CEP="127.0.0.1:5059"; unset -> /api/spread disabled.
+  spread: cepTarget("OPENQ_SPREAD_CEP", 5059),
+
+  // the primefinance module's CEP (modules/primefinance/cep.q) - holds the
+  // .prime.* securities-finance state, read by /api/prime.
+  // OPENQ_PRIME_CEP="127.0.0.1:5074"; unset -> /api/prime disabled.
+  prime: cepTarget("OPENQ_PRIME_CEP", 5074),
+
+  // the report module's CEP (modules/report/cep.q) - holds .report.latest,
+  // the per-symbol Desk Risk & TCA table, read by /api/report.
+  // OPENQ_REPORT_CEP="127.0.0.1:5080"; unset -> /api/report disabled.
+  report: cepTarget("OPENQ_REPORT_CEP", 5080),
 };
+
+function cepTarget(envName, defPort) {
+  const hp = str(envName, "");
+  if (!hp) return { enabled: false };
+  const [h, p] = hp.split(":");
+  return {
+    enabled: true,
+    host: h || "127.0.0.1",
+    port: Number(p) || defPort,
+    user: str(envName + "_USER", ""),
+    password: str(envName + "_PASSWORD", ""),
+    timeoutMs: cepTimeoutMs,
+  };
+}
+
+config.cepTimeoutMs = cepTimeoutMs;
 
 module.exports = config;
