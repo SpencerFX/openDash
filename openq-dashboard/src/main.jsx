@@ -5,7 +5,7 @@ import {
   Gauge, LayoutDashboard, ListFilter, MemoryStick, Network, Play, RefreshCw,
   ScrollText, Search, Settings, ShieldCheck, TrendingDown, TrendingUp, Wifi
 } from "lucide-react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ReferenceLine, ResponsiveContainer, CartesianGrid, AreaChart, Area } from "recharts";
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ReferenceLine, ResponsiveContainer, CartesianGrid, AreaChart, Area } from "recharts";
 import "./index.css";
 
 // Base URL of the openq-dashboard-gateway (see ../gateway). Falls back to the
@@ -26,15 +26,11 @@ const chart = Array.from({length: 24}, (_,i) => ({
   impact: 0.2 + Math.sin(i/3)*0.35 + i/80
 }));
 
-const impact = Array.from({length: 31}, (_,i) => {
-  const t = -10 + i*2.333;
-  return { t: Number(t.toFixed(1)), value: 0.31 + (1.55-0.31)*Math.exp(-Math.max(t,0)/18.2) + (t<0 ? Math.abs(t)/100 : 0) };
-});
-
 function Nav({active,setActive}) {
   const items = [
-    ["Overview",LayoutDashboard],["Logs",ScrollText],["Market Impact",BarChart3],
-    ["Markout",TrendingUp],["Processes",Cpu],["Tables",Database]
+    ["Overview",LayoutDashboard],["Desk Risk",ShieldCheck],["Logs",ScrollText],
+    ["Market Impact",BarChart3],["Markout",TrendingUp],["Prime Finance",CircleDollarSign],
+    ["Processes",Cpu],["Spreads",TrendingDown],["Tables",Database]
   ];
   return <aside className="w-60 shrink-0 border-r border-slate-800 bg-[#08121a] p-4">
     <div className="mb-7 flex items-center gap-2 px-2">
@@ -101,21 +97,529 @@ function Orders({orders}) {
 }
 
 function Impact() {
+  const [data,setData] = useState(null);
+  const [err,setErr] = useState(null);
+  const [auto,setAuto] = useState(true);
+  const [updated,setUpdated] = useState(null);
+
+  const load = useCallback(() => {
+    fetch(new URL("/api/markout", GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if(!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!auto) return;
+    const id = setInterval(load, 3000);
+    return () => clearInterval(id);
+  }, [auto, load]);
+
+  const im = data?.impact || {};
+  const s = data?.summary || {};
+  const curve = (im.curve || []).map(r => ({ ...r, label: fmtOffset(r.offsetSec) }));
+  const bySym = im.bySym || [];
+
+  // decay tau: from the peak, first offset where |impact| falls to |peak|/e
+  const tau = (() => {
+    const pts = curve.filter(r => r.offsetSec >= 0 && r.impactBps != null);
+    if (pts.length < 3) return null;
+    let peak = pts[0];
+    for (const p of pts) if (Math.abs(p.impactBps) > Math.abs(peak.impactBps)) peak = p;
+    const target = Math.abs(peak.impactBps) / Math.E;
+    for (const p of pts) if (p.offsetSec > peak.offsetSec && Math.abs(p.impactBps) <= target) return p.offsetSec - peak.offsetSec;
+    return null;
+  })();
+  const pctPerm = (im.peakBps && im.permanentBps != null && im.peakBps !== 0)
+    ? Math.abs(im.permanentBps / im.peakBps) * 100 : null;
+
   return <div className="space-y-4">
-    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      <Metric label="Temporary Impact" value="1.24 bps" delta="current estimate" icon={TrendingUp}/>
-      <Metric label="Permanent Impact" value="0.31 bps" delta="25.0% of total" icon={Activity}/>
-      <Metric label="Decay τ" value="18.2s" delta="fit confidence 94%" icon={Gauge}/>
-      <Metric label="Sample Size" value="82,416" delta="executions" icon={Database}/>
-    </div>
-    <section className="panel p-4">
-      <div className="mb-1 font-semibold">Market Impact Decay</div><div className="mb-4 text-xs text-slate-500">Average impact around order arrival · bps</div>
-      <div className="h-96"><ResponsiveContainer width="100%" height="100%"><LineChart data={impact}><CartesianGrid stroke="#1e2b36" vertical={false}/><XAxis dataKey="t" stroke="#566673" fontSize={10}/><YAxis stroke="#566673" fontSize={10}/><Tooltip contentStyle={{background:"#0b151e",border:"1px solid #263746"}}/><Line type="monotone" dataKey="value" stroke="#22d3ee" dot={false} strokeWidth={2}/></LineChart></ResponsiveContainer></div>
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">order / execution impact · <span className="text-slate-500">markout module CEP via gateway</span></span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e=>setAuto(e.target.checked)}/> auto-refresh</label>
+      <button onClick={load} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {data?.connected === false && <span className="text-amber-400">CEP disconnected</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
     </section>
-    <div className="grid gap-4 xl:grid-cols-3">
-      {["EURUSD","USDJPY","GBPUSD"].map((s,i)=><div className="panel p-4" key={s}><div className="flex justify-between"><span className="font-semibold">{s}</span><span className="badge bg-slate-800 text-slate-400">TODAY</span></div><div className="mt-4 text-xl">{[1.12,0.86,1.47][i]} <span className="text-xs text-slate-500">bps</span></div><div className="mt-1 text-xs text-slate-500">median impact · 1,000+ fills</div></div>)}
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/markout — {err}
+      <div className="mt-1 text-rose-400/70">needs the markout module + a feeder running.</div></div>}
+
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <Metric label="Temporary impact" value={bps1(im.peakBps)} delta="peak, 0–10s" icon={TrendingUp}/>
+      <Metric label="Permanent impact" value={bps1(im.permanentBps)} delta={pctPerm==null?"≥30s tail":`${pctPerm.toFixed(0)}% of peak`} icon={Activity}/>
+      <Metric label="Decay τ" value={tau==null?"—":`${tau.toFixed(1)}s`} delta="to peak / e" icon={Gauge}/>
+      <Metric label="Grid samples" value={s.imSamples!=null?Number(s.imSamples).toLocaleString():"—"} delta={`${s.imOrders ?? 0} orders`} icon={Database}/>
     </div>
-  </div>
+
+    <section className="panel p-4">
+      <div className="mb-1 font-semibold">Market impact decay</div>
+      <div className="mb-3 text-xs text-slate-500">mid move in the order's direction around arrival, −10s to +60s · bps (adverse +)</div>
+      <DecayChart data={curve} dataKey="impactBps" color="#22d3ee" label="impact"/>
+    </section>
+
+    <section className="panel overflow-hidden">
+      <div className="border-b border-slate-800 px-4 py-3 font-semibold">By symbol <span className="text-xs text-slate-500">recent order flow</span></div>
+      <table className="w-full text-left text-xs">
+        <thead className="bg-[#0a121a] text-slate-500"><tr>{["Symbol","Temporary","Permanent","Orders"].map(h=><th key={h} className="px-4 py-2 font-medium">{h}</th>)}</tr></thead>
+        <tbody>
+          {bySym.map(r=><tr key={r.sym} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+            <td className="px-4 py-1.5 font-semibold text-slate-200">{r.sym}</td>
+            <td className="px-4 py-1.5 tabular-nums text-cyan-300">{bps1(r.peakBps)}</td>
+            <td className="px-4 py-1.5 tabular-nums text-slate-300">{bps1(r.permanentBps)}</td>
+            <td className="px-4 py-1.5 tabular-nums text-slate-400">{r.orders}</td>
+          </tr>)}
+          {data && !bySym.length && <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-600">no completed impact offsets yet</td></tr>}
+        </tbody>
+      </table>
+    </section>
+  </div>;
+}
+
+// ---- Spreads (build-up attribution) --------------------------------
+const SPREAD_COMPONENTS = [
+  { key: "refSprd",      label: "Reference",   color: "#22d3ee" },
+  { key: "baseSprd",     label: "Base markup", color: "#34d399" },
+  { key: "clientSprd",   label: "Client tier", color: "#a78bfa" },
+  { key: "volSprd",      label: "Volatility",  color: "#f59e0b" },
+  { key: "smoothSprd",   label: "Smoothing",   color: "#38bdf8" },
+  { key: "fallbackSprd", label: "Fallback",    color: "#fb923c" },
+  { key: "alphaSprd",    label: "Alpha / signal", color: "#f43f5e" },
+];
+const bps2 = (v) => (v == null || !isFinite(v) ? "—" : `${v.toFixed(2)} bps`);
+
+function Spreads() {
+  const [data,setData] = useState(null);
+  const [err,setErr] = useState(null);
+  const [auto,setAuto] = useState(true);
+  const [updated,setUpdated] = useState(null);
+
+  const load = useCallback(() => {
+    fetch(new URL("/api/spread", GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if(!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!auto) return;
+    const id = setInterval(load, 3000);
+    return () => clearInterval(id);
+  }, [auto, load]);
+
+  const s = data?.summary || {};
+  const attr = data?.attribution || [];
+  const bySym = data?.bySym || [];
+  const byRegime = data?.byRegime || [];
+  const widest = data?.widest || [];
+
+  const attrMaxPct = Math.max(1, ...attr.map(a => Math.abs(a.pctOfTotal || 0)));
+  const symChartData = bySym.map(r => ({ sym: r.sym, ...r.components }));
+  const dominant = attr.reduce((m,a)=> (Math.abs(a.valueBps||0) > Math.abs(m?.valueBps||0) ? a : m), null);
+
+  // regime grid
+  const aggs = [...new Set(byRegime.map(r=>r.aggression))];
+  const mkts = [...new Set(byRegime.map(r=>r.marketStatus))];
+  const cell = (a,m) => byRegime.find(r=>r.aggression===a && r.marketStatus===m)?.totalBps;
+  const regMax = Math.max(1, ...byRegime.map(r=>r.totalBps||0));
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">quoted-spread build-up &amp; attribution · <span className="text-slate-500">spread module CEP via gateway</span></span>
+      <label className="flex items-center gap-1.5 text-slate-400">
+        <input type="checkbox" checked={auto} onChange={e=>setAuto(e.target.checked)}/> auto-refresh
+      </label>
+      <button onClick={load} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900">
+        <RefreshCw size={12}/> refresh
+      </button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {data?.connected === false && <span className="text-amber-400">CEP disconnected</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">
+      {GW}/api/spread — {err}
+      <div className="mt-1 text-rose-400/70">needs the spread module running + a feeder (gateway/tools/spread-feeder.js) and OPENQ_SPREAD_CEP set.</div>
+    </div>}
+
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <Metric label="Keys quoting" value={String(s.keys ?? "—")} delta={`${s.syms ?? 0} symbols`} icon={TrendingDown}/>
+      <Metric label="Mean spread" value={bps2(s.meanBps)} delta="weighted, all keys" icon={Activity}/>
+      <Metric label="Widest key" value={bps2(s.widestBps)} delta="current snapshot" icon={TrendingUp}/>
+      <Metric label="Largest component" value={dominant ? SPREAD_COMPONENTS.find(c=>c.key===dominant.component)?.label ?? dominant.component : "—"} delta={dominant ? `${bps2(dominant.valueBps)} · ${dominant.pctOfTotal?.toFixed(0)}%` : ""} icon={Gauge}/>
+    </div>
+
+    <section className="panel p-4">
+      <div className="mb-3 font-semibold">Spread build-up <span className="text-xs text-slate-500">weighted across all keys — reference → quoted</span></div>
+      <div className="space-y-2.5">
+        {SPREAD_COMPONENTS.map(c => {
+          const a = attr.find(x => x.component === c.key) || {};
+          const pct = a.pctOfTotal ?? 0;
+          const w = Math.min(100, (Math.abs(pct) / attrMaxPct) * 100);
+          return <div key={c.key} className="flex items-center gap-3 text-xs">
+            <div className="w-28 shrink-0 text-slate-400">{c.label}</div>
+            <div className="relative h-3 flex-1 rounded bg-slate-800">
+              <div className="absolute inset-y-0 rounded" style={{width:`${w}%`, background:c.color, opacity: pct<0?0.45:1, left: pct<0?`${100-w}%`:0}}/>
+            </div>
+            <div className="w-20 shrink-0 text-right tabular-nums text-slate-300">{a.valueBps==null?"—":a.valueBps.toFixed(3)}</div>
+            <div className="w-14 shrink-0 text-right tabular-nums text-slate-500">{pct==null?"":`${pct.toFixed(1)}%`}</div>
+          </div>;
+        })}
+      </div>
+    </section>
+
+    <div className="grid gap-4 xl:grid-cols-[2fr_1fr]">
+      <section className="panel p-4">
+        <div className="mb-3 flex justify-between"><div className="font-semibold">By symbol</div><span className="badge bg-slate-800 text-slate-400">bps · stacked</span></div>
+        <div className="h-72"><ResponsiveContainer width="100%" height="100%">
+          <BarChart data={symChartData} margin={{ top: 6, right: 8, bottom: 4, left: 0 }}>
+            <CartesianGrid stroke="#1e2b36" vertical={false}/>
+            <XAxis dataKey="sym" stroke="#566673" fontSize={10}/>
+            <YAxis stroke="#566673" fontSize={10} width={40}/>
+            <Tooltip contentStyle={{background:"#0b151e",border:"1px solid #263746",fontSize:12}}
+              formatter={(v,n)=>[`${Number(v).toFixed(3)} bps`, SPREAD_COMPONENTS.find(c=>c.key===n)?.label ?? n]}/>
+            {SPREAD_COMPONENTS.map(c=>
+              <Bar key={c.key} dataKey={c.key} stackId="s" fill={c.color} isAnimationActive={false}/>)}
+          </BarChart>
+        </ResponsiveContainer></div>
+      </section>
+
+      <section className="panel p-4">
+        <div className="mb-3 font-semibold">By regime</div>
+        <div className="text-xs">
+          <div className="grid" style={{gridTemplateColumns:`5rem repeat(${mkts.length}, 1fr)`}}>
+            <div/>
+            {mkts.map(m => <div key={m} className="pb-1 text-center text-[10px] uppercase tracking-wider text-slate-500">{m}</div>)}
+            {aggs.map(a => <React.Fragment key={a}>
+              <div className="flex items-center text-[10px] uppercase tracking-wider text-slate-500">{a}</div>
+              {mkts.map(m => {
+                const v = cell(a,m);
+                return <div key={a+m} className="m-0.5 rounded px-2 py-3 text-center tabular-nums text-slate-100"
+                  style={{background:`rgba(34,211,238,${v==null?0:0.12+0.6*(v/regMax)})`}}>
+                  {v==null ? "—" : v.toFixed(2)}
+                </div>;
+              })}
+            </React.Fragment>)}
+          </div>
+          <div className="mt-2 text-[10px] text-slate-600">weighted total spread (bps) per aggression × market status</div>
+        </div>
+      </section>
+    </div>
+
+    <section className="panel overflow-hidden">
+      <div className="border-b border-slate-800 px-4 py-3 font-semibold">Widest right now</div>
+      <table className="w-full text-left text-xs">
+        <thead className="bg-[#0a121a] text-slate-500"><tr>{["Symbol","Aggression","Market status","Total","Age"].map(h=><th key={h} className="px-4 py-2 font-medium">{h}</th>)}</tr></thead>
+        <tbody>
+          {widest.map((w,i)=>
+            <tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+              <td className="px-4 py-1.5 font-semibold text-slate-200">{w.sym}</td>
+              <td className="px-4 py-1.5"><span className="badge bg-slate-800 text-slate-400">{w.aggression}</span></td>
+              <td className="px-4 py-1.5"><span className={`badge ${w.marketStatus==="stressed"?"bg-rose-950 text-rose-300":"bg-slate-800 text-slate-400"}`}>{w.marketStatus}</span></td>
+              <td className="px-4 py-1.5 tabular-nums text-cyan-300">{bps2(w.totalBps)}</td>
+              <td className="px-4 py-1.5 text-slate-500">{w.ageSec==null?"—":`${w.ageSec.toFixed(1)}s`}</td>
+            </tr>)}
+          {data && !widest.length && <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-600">no spread quotes yet — is the feeder running?</td></tr>}
+        </tbody>
+      </table>
+    </section>
+  </div>;
+}
+
+// ---- Desk Risk & TCA (report module) ------------------------------
+const DR_COMPONENTS = [
+  { key: "spreadCostBp",   label: "Spread",    color: "#22d3ee" },
+  { key: "markoutBp",      label: "Markout",   color: "#a78bfa" },
+  { key: "impactBp",       label: "Impact",    color: "#f59e0b" },
+  { key: "financingFeeBp", label: "Financing", color: "#f43f5e" },
+];
+const DR_BUCKET_BADGE = {
+  FULL: "bg-emerald-950 text-emerald-300", PARTIAL: "bg-cyan-950 text-cyan-300",
+  AT_RISK: "bg-amber-950 text-amber-300", UNLOCATED: "bg-rose-950 text-rose-300",
+};
+const bpCell = (v) => (v == null ? <span className="text-slate-600">—</span> : <span className={v < 0 ? "text-emerald-400" : "text-slate-300"}>{v.toFixed(2)}</span>);
+
+function DeskRisk() {
+  const [data,setData] = useState(null);
+  const [err,setErr] = useState(null);
+  const [auto,setAuto] = useState(true);
+  const [updated,setUpdated] = useState(null);
+
+  const load = useCallback(() => {
+    fetch(new URL("/api/report", GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if(!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!auto) return;
+    const id = setInterval(load, 3000);
+    return () => clearInterval(id);
+  }, [auto, load]);
+
+  const rows = data?.rows || [];
+  const t = data?.totals || {};
+  const byBucket = data?.byBucket || [];
+
+  // top symbols by all-in cost, magnitude of each component for the stacked bar
+  const chartRows = rows
+    .filter(r => r.allInBp != null)
+    .slice(0, 10)
+    .map(r => ({ sym: r.sym, ...Object.fromEntries(DR_COMPONENTS.map(c => [c.key, Math.abs(r[c.key] || 0)])) }));
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">desk risk &amp; TCA · spread + markout + financing per symbol · <span className="text-slate-500">report module CEP (60s recompute)</span></span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e=>setAuto(e.target.checked)}/> auto-refresh</label>
+      <button onClick={load} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {data?.connected === false && <span className="text-amber-400">CEP disconnected</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/report — {err}
+      <div className="mt-1 text-rose-400/70">needs the report module running (startupAllByModule.sh report) and OPENQ_REPORT_CEP set.</div></div>}
+
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <Metric label="Symbols" value={String(t.syms ?? "—")} delta="in the desk report" icon={ListFilter}/>
+      <Metric label="Short exposure" value={fmtCount(t.shortQty)} delta={`${fmtCount(t.locatedQty)} located`} icon={CircleDollarSign}/>
+      <Metric label="Avg all-in cost" value={t.avgAllInBp==null?"—":`${t.avgAllInBp.toFixed(1)} bps`} delta={t.maxAllInBp==null?"":`max ${t.maxAllInBp.toFixed(0)} bps`} icon={Gauge}/>
+      <Metric label="At-risk names" value={String(t.atRisk ?? 0)} delta="AT_RISK / UNLOCATED" icon={ShieldCheck}/>
+    </div>
+
+    <section className="panel p-4">
+      <div className="mb-3 flex justify-between"><div className="font-semibold">All-in cost by symbol</div><span className="badge bg-slate-800 text-slate-400">|bps| · stacked</span></div>
+      <div className="h-72"><ResponsiveContainer width="100%" height="100%">
+        <BarChart data={chartRows} layout="vertical" margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
+          <CartesianGrid stroke="#1e2b36" horizontal={false}/>
+          <XAxis type="number" stroke="#566673" fontSize={10}/>
+          <YAxis type="category" dataKey="sym" stroke="#566673" fontSize={10} width={56}/>
+          <Tooltip contentStyle={{background:"#0b151e",border:"1px solid #263746",fontSize:12}}
+            formatter={(v,n)=>[`${Number(v).toFixed(2)} bps`, DR_COMPONENTS.find(c=>c.key===n)?.label ?? n]}/>
+          <Legend wrapperStyle={{fontSize:10}}/>
+          {DR_COMPONENTS.map(c=><Bar key={c.key} dataKey={c.key} name={c.key} stackId="c" fill={c.color} isAnimationActive={false}/>)}
+        </BarChart>
+      </ResponsiveContainer></div>
+      <div className="mt-1 text-[10px] text-slate-600">financing fee dominates the borrow-heavy names; execution costs (spread/markout/impact) are single-digit bps</div>
+    </section>
+
+    <section className="panel overflow-hidden">
+      <div className="border-b border-slate-800 px-4 py-3 font-semibold">Desk risk report <span className="text-xs text-slate-500">per symbol</span></div>
+      <div className="max-h-[52vh] overflow-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Symbol","Spread","Markout","Impact","Financing","All-in","Short","Coverage","Bucket"].map(h=><th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+          <tbody className="tabular-nums">
+            {rows.map(r=><tr key={r.sym} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+              <td className="px-3 py-1.5 font-mono font-semibold text-slate-200">{r.sym}</td>
+              <td className="px-3 py-1.5">{bpCell(r.spreadCostBp)}</td>
+              <td className="px-3 py-1.5">{bpCell(r.markoutBp)}</td>
+              <td className="px-3 py-1.5">{bpCell(r.impactBp)}</td>
+              <td className="px-3 py-1.5">{bpCell(r.financingFeeBp)}</td>
+              <td className="px-3 py-1.5 font-semibold text-cyan-300">{r.allInBp==null?"—":r.allInBp.toFixed(1)}</td>
+              <td className="px-3 py-1.5 text-slate-400">{r.shortQty==null?"—":r.shortQty.toLocaleString()}</td>
+              <td className="px-3 py-1.5 text-slate-300">{r.coverage==null?"—":`${(r.coverage*100).toFixed(0)}%`}</td>
+              <td className="px-3 py-1.5">{r.bucket ? <span className={`badge ${DR_BUCKET_BADGE[r.bucket]||"bg-slate-800 text-slate-400"}`}>{r.bucket}</span> : <span className="text-slate-600">—</span>}</td>
+            </tr>)}
+            {data && !rows.length && <tr><td colSpan={9} className="px-3 py-8 text-center text-slate-600">report is empty — is any upstream module feeding data?</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {byBucket.length > 0 && <div className="flex flex-wrap gap-x-6 gap-y-1 border-t border-slate-800 px-4 py-2 text-xs">
+        {byBucket.map(b => <span key={b.bucket} className="flex items-center gap-1.5">
+          <span className={`badge ${DR_BUCKET_BADGE[b.bucket]||"bg-slate-800 text-slate-500"}`}>{b.bucket}</span>
+          <span className="tabular-nums text-slate-300">{b.syms}</span>
+          <span className="tabular-nums text-slate-600">{fmtCount(b.shortQty)}</span>
+        </span>)}
+      </div>}
+    </section>
+  </div>;
+}
+
+// ---- Prime Finance (securities lending) ----------------------------
+const PF_BUCKETS = [
+  { key: "FULL",      label: "Full",      color: "#34d399" },
+  { key: "PARTIAL",   label: "Partial",   color: "#22d3ee" },
+  { key: "AT_RISK",   label: "At risk",   color: "#f59e0b" },
+  { key: "UNLOCATED", label: "Unlocated", color: "#f43f5e" },
+];
+const PF_BUCKET_BADGE = {
+  FULL: "bg-emerald-950 text-emerald-300", PARTIAL: "bg-cyan-950 text-cyan-300",
+  AT_RISK: "bg-amber-950 text-amber-300", UNLOCATED: "bg-rose-950 text-rose-300",
+};
+const PF_SEV_BADGE = {
+  CRITICAL: "bg-rose-950 text-rose-300", HIGH: "bg-amber-950 text-amber-300",
+  MEDIUM: "bg-slate-800 text-slate-300", LOW: "bg-slate-900 text-slate-500",
+};
+const pct1 = (v) => (v == null || !isFinite(v) ? "—" : `${v.toFixed(1)}%`);
+
+function PrimeFinance() {
+  const [data,setData] = useState(null);
+  const [err,setErr] = useState(null);
+  const [auto,setAuto] = useState(true);
+  const [updated,setUpdated] = useState(null);
+
+  const load = useCallback(() => {
+    fetch(new URL("/api/prime", GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if(!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!auto) return;
+    const id = setInterval(load, 3000);
+    return () => clearInterval(id);
+  }, [auto, load]);
+
+  const s = data?.summary || {};
+  const cov = [...(data?.coverage || [])].sort((a,b)=>a.coverage-b.coverage);
+  const byBucket = data?.coverageByBucket || [];
+  const inv = [...(data?.inventory || [])];
+  const htb = data?.htb || [];
+  const htbBySym = Object.fromEntries(htb.map(h=>[h.sym,h.score]));
+  const invSorted = inv.sort((a,b)=>(htbBySym[b.sym]||0)-(htbBySym[a.sym]||0));
+  const alerts = data?.alerts || [];
+  const recalls = data?.recalls || [];
+  const buyins = data?.buyins || [];
+
+  const bucketTotal = Math.max(1, byBucket.reduce((a,b)=>a+b.shortQty,0));
+  const maxAvail = Math.max(1, ...inv.map(r=>r.available));
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">securities finance · locate coverage &amp; borrow economics · <span className="text-slate-500">primefinance CEP via gateway</span></span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e=>setAuto(e.target.checked)}/> auto-refresh</label>
+      <button onClick={load} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {data?.connected === false && <span className="text-amber-400">CEP disconnected</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/prime — {err}
+      <div className="mt-1 text-rose-400/70">needs the primefinance module running + a feeder (gateway/tools/prime-feeder.js) and OPENQ_PRIME_CEP set.</div></div>}
+
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <Metric label="Short exposure" value={fmtCount(s.shortQty)} delta={`${fmtCount(s.availQty)} lendable`} icon={CircleDollarSign}/>
+      <Metric label="Locate coverage" value={pct1(s.coveragePct)} delta="located ÷ short" icon={ShieldCheck}/>
+      <Metric label="Locate fill" value={pct1(s.locateFillPct)} delta={`${s.openLocates ?? 0} open locates`} icon={ListFilter}/>
+      <Metric label="Risk events" value={String((s.openBuyins ?? 0) + (s.alerts ?? 0))} delta={`${s.openBuyins ?? 0} buy-ins · ${s.alerts ?? 0} alerts`} icon={ShieldCheck}/>
+    </div>
+
+    <section className="panel p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="font-semibold">Locate coverage <span className="text-xs text-slate-500">short quantity by coverage bucket</span></div>
+      </div>
+      <div className="mb-3 flex h-4 w-full overflow-hidden rounded">
+        {PF_BUCKETS.map(b => {
+          const row = byBucket.find(x=>x.bucket===b.key);
+          const w = row ? (row.shortQty / bucketTotal) * 100 : 0;
+          return w > 0 ? <div key={b.key} style={{width:`${w}%`, background:b.color}} title={`${b.label}: ${row.shortQty.toLocaleString()}`}/> : null;
+        })}
+      </div>
+      <div className="mb-4 flex flex-wrap gap-x-6 gap-y-1 text-xs">
+        {PF_BUCKETS.map(b => {
+          const row = byBucket.find(x=>x.bucket===b.key) || { pairs:0, shortQty:0 };
+          return <div key={b.key} className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-full" style={{background:b.color}}/>
+            <span className="text-slate-400">{b.label}</span>
+            <span className="tabular-nums text-slate-300">{row.pairs}</span>
+            <span className="tabular-nums text-slate-600">{fmtCount(row.shortQty)}</span>
+          </div>;
+        })}
+      </div>
+      <div className="max-h-64 overflow-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Client","Symbol","Short","Located","Coverage","Bucket"].map(h=><th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+          <tbody>
+            {cov.map((r,i)=><tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+              <td className="px-3 py-1.5 font-semibold text-slate-200">{r.client}</td>
+              <td className="px-3 py-1.5 font-mono text-cyan-300">{r.sym}</td>
+              <td className="px-3 py-1.5 tabular-nums text-slate-300">{r.shortQty.toLocaleString()}</td>
+              <td className="px-3 py-1.5 tabular-nums text-slate-400">{r.locatedQty.toLocaleString()}</td>
+              <td className="px-3 py-1.5 tabular-nums">{pct1(r.coverage*100)}</td>
+              <td className="px-3 py-1.5"><span className={`badge ${PF_BUCKET_BADGE[r.bucket]||"bg-slate-800 text-slate-400"}`}>{r.bucket}</span></td>
+            </tr>)}
+            {data && !cov.length && <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-600">no short positions</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <div className="grid gap-4 xl:grid-cols-[3fr_2fr]">
+      <section className="panel overflow-hidden">
+        <div className="border-b border-slate-800 px-4 py-3 font-semibold">Inventory &amp; hard-to-borrow <span className="text-xs text-slate-500">by symbol</span></div>
+        <div className="max-h-72 overflow-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Symbol","Available","Fee","Recall risk","Lenders","HTB"].map(h=><th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody>
+              {invSorted.map(r=>{
+                const score = htbBySym[r.sym] || 0;
+                return <tr key={r.sym} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+                  <td className="px-3 py-1.5 font-mono font-semibold text-slate-200">{r.sym}</td>
+                  <td className="px-3 py-1.5"><div className="flex items-center gap-2"><span className="w-14 tabular-nums text-slate-300">{fmtCount(r.available)}</span><div className="h-1.5 w-14 rounded bg-slate-800"><div className="h-full rounded bg-cyan-500/70" style={{width:`${(r.available/maxAvail)*100}%`}}/></div></div></td>
+                  <td className="px-3 py-1.5 tabular-nums text-slate-300">{r.feeBp==null?"—":`${r.feeBp.toFixed(0)} bp`}</td>
+                  <td className="px-3 py-1.5 tabular-nums text-slate-400">{r.recallRisk==null?"—":`${(r.recallRisk*100).toFixed(0)}%`}</td>
+                  <td className="px-3 py-1.5 tabular-nums text-slate-500">{r.lenders}</td>
+                  <td className="px-3 py-1.5"><div className="flex items-center gap-1.5"><div className="h-1.5 w-12 rounded bg-slate-800"><div className="h-full rounded" style={{width:`${score*100}%`, background: score>0.6?"#f43f5e":score>0.35?"#f59e0b":"#64748b"}}/></div><span className="tabular-nums text-slate-400">{score.toFixed(2)}</span></div></td>
+                </tr>;
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel p-4">
+        <div className="mb-3 font-semibold">Recalls &amp; buy-ins</div>
+        <div className="space-y-3 text-xs">
+          <div>
+            <div className="mb-1 text-slate-500">Recalls by severity</div>
+            {recalls.length ? recalls.map(r=><div key={r.severity} className="flex justify-between py-0.5">
+              <span><span className={`badge ${PF_SEV_BADGE[r.severity]||"bg-slate-800 text-slate-400"}`}>{r.severity}</span></span>
+              <span className="tabular-nums text-slate-300">{fmtCount(r.qty)} <span className="text-slate-600">/ {r.n}</span></span>
+            </div>) : <div className="text-slate-600">none</div>}
+          </div>
+          <div className="border-t border-slate-800 pt-3">
+            <div className="mb-1 text-slate-500">Buy-ins</div>
+            {buyins.length ? buyins.map(b=><div key={b.status} className="flex justify-between py-0.5">
+              <span className="text-slate-300">{b.status}</span>
+              <span className="tabular-nums text-slate-300">{fmtCount(b.qty)} <span className="text-slate-600">/ {b.n}</span></span>
+            </div>) : <div className="text-slate-600">none open</div>}
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <section className="panel overflow-hidden">
+      <div className="border-b border-slate-800 px-4 py-3 font-semibold">Alerts <span className="text-xs text-slate-500">recent</span></div>
+      <div className="max-h-64 overflow-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Time","Severity","Kind","Client","Symbol","Qty","Message"].map(h=><th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+          <tbody>
+            {alerts.map((a,i)=><tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+              <td className="whitespace-nowrap px-3 py-1.5 text-slate-500">{a.timestamp ? String(a.timestamp).slice(11,19) : "—"}</td>
+              <td className="px-3 py-1.5"><span className={`badge ${PF_SEV_BADGE[a.severity]||"bg-slate-800 text-slate-400"}`}>{a.severity}</span></td>
+              <td className="px-3 py-1.5 font-mono text-slate-300">{a.kind}</td>
+              <td className="px-3 py-1.5 text-slate-300">{a.client}</td>
+              <td className="px-3 py-1.5 font-mono text-cyan-300">{a.sym}</td>
+              <td className="px-3 py-1.5 tabular-nums text-slate-400">{a.qty?.toLocaleString?.() ?? a.qty}</td>
+              <td className="px-3 py-1.5 text-slate-500">{a.message}</td>
+            </tr>)}
+            {data && !alerts.length && <tr><td colSpan={7} className="px-3 py-6 text-center text-slate-600">no alerts</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>;
 }
 
 // ---- Tables (in-memory inventory) ------------------------------------
@@ -669,6 +1173,9 @@ function App() {
     if(active==="Tables") return <Tables/>;
     if(active==="Market Impact") return <Impact/>;
     if(active==="Markout") return <Markout/>;
+    if(active==="Spreads") return <Spreads/>;
+    if(active==="Prime Finance") return <PrimeFinance/>;
+    if(active==="Desk Risk") return <DeskRisk/>;
     if(active==="Processes") return <Processes/>;
     if(active==="Logs") return <Logs/>;
     return <Overview orders={orders}/>;

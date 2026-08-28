@@ -11,6 +11,9 @@ const { toRows } = require("./qshape");
 const { BadInput } = require("./qlit");
 const { readLogs } = require("./logs");
 const { MarkoutReader } = require("./markout");
+const { SpreadReader } = require("./spread");
+const { PrimeReader } = require("./prime");
+const { ReportReader } = require("./report");
 const { TablesReader } = require("./tables");
 
 function send(res, status, body) {
@@ -114,9 +117,12 @@ function createServer() {
   };
   const stream = config.stream.enabled ? new StreamBridge(config.stream) : null;
   const markout = config.markout.enabled ? new MarkoutReader(config.markout) : null;
+  const spread = config.spread.enabled ? new SpreadReader(config.spread) : null;
+  const prime = config.prime.enabled ? new PrimeReader(config.prime) : null;
+  const report = config.report.enabled ? new ReportReader(config.report) : null;
   const tables =
     config.tableSources && config.tableSources.length
-      ? new TablesReader(config.tableSources)
+      ? new TablesReader(config.tableSources, config.cepTimeoutMs)
       : null;
 
   const httpServer = http.createServer(async (req, res) => {
@@ -138,8 +144,41 @@ function createServer() {
           gateways: Object.fromEntries([...gws].map(([n, g]) => [n, g.status()])),
           stream: stream ? stream.status() : { enabled: false },
           markout: markout ? markout.status() : { enabled: false },
+          spread: spread ? spread.status() : { enabled: false },
+          prime: prime ? prime.status() : { enabled: false },
+          report: report ? report.status() : { enabled: false },
           tables: tables ? tables.status() : { enabled: false },
         });
+      }
+
+      if (url.pathname === "/api/report") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!report) {
+          const e = new Error("report disabled (set OPENQ_REPORT_CEP)");
+          e.statusCode = 503;
+          throw e;
+        }
+        return send(res, 200, await report.read());
+      }
+
+      if (url.pathname === "/api/prime") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!prime) {
+          const e = new Error("prime disabled (set OPENQ_PRIME_CEP)");
+          e.statusCode = 503;
+          throw e;
+        }
+        return send(res, 200, await prime.read());
+      }
+
+      if (url.pathname === "/api/spread") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!spread) {
+          const e = new Error("spread disabled (set OPENQ_SPREAD_CEP)");
+          e.statusCode = 503;
+          throw e;
+        }
+        return send(res, 200, await spread.read());
       }
 
       if (url.pathname === "/api/tables") {
@@ -275,6 +314,9 @@ function createServer() {
     const starts = await Promise.all([...gws].map(async ([n, g]) => [n, await g.start()]));
     if (stream) stream.start();
     if (markout) markout.start();
+    if (spread) spread.start();
+    if (prime) prime.start();
+    if (report) report.start();
     if (tables) tables.start();
     await new Promise((resolve) => httpServer.listen(config.port, resolve));
     return { targets: Object.fromEntries(starts) };
@@ -286,10 +328,13 @@ function createServer() {
     await Promise.all([...gws.values()].map((g) => g.stop()));
     if (stream) await stream.stop();
     if (markout) await markout.stop();
+    if (spread) await spread.stop();
+    if (prime) await prime.stop();
+    if (report) await report.stop();
     if (tables) await tables.stop();
   }
 
-  return { httpServer, wss, gws, stream, markout, tables, start, stop };
+  return { httpServer, wss, gws, stream, markout, spread, prime, report, tables, start, stop };
 }
 
 module.exports = { createServer };

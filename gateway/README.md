@@ -155,6 +155,39 @@ Deal markout + order impact decay curves read live off the markout module's
 CEP. No parameters. Enabled only when `OPENQ_MARKOUT_CEP` is set. See
 "Markout" below for the response shape.
 
+### `GET /api/spread`
+
+Quoted-spread build-up attribution read live off the spread module's CEP
+(`modules/spread/cep.q` → `analytics/spread.q`). A quote's spread is modelled as
+the sum of 7 named components (`refSprd`…`alphaSprd`); this returns the weighted
+build-up overall, by symbol, and by regime (aggression × market status), plus
+the currently-widest keys and per-symbol percentiles. All values in bps. No
+parameters. Enabled only when `OPENQ_SPREAD_CEP` is set. The dashboard's
+**Spreads** page renders it. See "Spreads" below.
+
+### `GET /api/report`
+
+Per-symbol Desk Risk & TCA table read off the report module's CEP
+(`modules/report/cep.q` -> `analytics/deskRisk.q`), which recomputes
+`.report.latest` every 60s by combining spread / markout / primefinance
+state: `spreadCostBp`, `markoutBp`, `impactBp`, `financingFeeBp`,
+`shortQty`, `locatedQty`, `coverage`, `bucket` per symbol (nulls where a
+symbol is absent from a domain). The endpoint adds an `allInBp` per row and
+by-bucket / totals rollups. No parameters. Enabled only when
+`OPENQ_REPORT_CEP` is set. The dashboard's **Desk Risk** page renders it.
+
+### `GET /api/prime`
+
+Securities-finance state read live off the primefinance module's CEP
+(`modules/primefinance/cep.q` → `analytics/primeFinance.q`, all `.prime.*`
+tables). Returns a summary (short exposure, locate coverage %, fill %, open
+buy-ins, alert count), locate coverage per client/sym and rolled up by bucket
+(`FULL`/`PARTIAL`/`AT_RISK`/`UNLOCATED`, from `.prime.positionCoverage`),
+inventory + a hard-to-borrow score per symbol, borrows, recalls by severity,
+buy-ins, and the recent alert stream. No parameters. Enabled only when
+`OPENQ_PRIME_CEP` is set. The dashboard's **Prime Finance** page renders it.
+See "Prime Finance" below.
+
 ### `GET /api/tables`
 
 In-memory table inventory across every configured openQ process (one RDB per
@@ -205,7 +238,11 @@ openQ's **markout** module CEP loads `analytics/markOutImpact.q` and keeps deal
 markout / order impact in in-memory keyed tables (`.markout.completed`,
 `.impact.completed`) that aren't published downstream. `GET /api/markout` reads
 them straight off the CEP over a plain jkdb sync connection and returns the two
-decay curves + a peak/permanent-impact split.
+decay curves + a peak/permanent-impact split + a per-symbol impact breakdown
+(`impact.bySym`, from the sym still held in `.impact.pending` for each recent
+order). The curves are **windowed to the recent past** (impact 5 min, markout
+10 min, on `matchedTime`) so they track "now" rather than an ever-growing
+history. It backs both the dashboard's **Markout** and **Market Impact** pages.
 
 ```bash
 Q_BIN=/path/to/q bash ../../openQ/scripts/startupAllByModule.sh markout   # CEP on :5034
@@ -228,6 +265,42 @@ Response:
                "peakBps": 0.09, "permanentBps": -0.41 }
 }
 ```
+
+## Prime Finance (the dashboard's Prime Finance page)
+
+openQ's **primefinance** module CEP loads `analytics/primeFinance.q` and keeps a
+securities-lending model in `.prime.*` (inventory → locate → reservation →
+borrow → coverage → recall → buy-in). `GET /api/prime` reads it off the CEP and
+returns locate coverage (via `.prime.positionCoverage`), inventory + a
+hard-to-borrow score, borrow economics, recalls, buy-ins, and alerts.
+
+```bash
+Q_BIN=/path/to/q bash ../../openQ/scripts/startupAllByModule.sh primefinance  # tp :5070, cep :5074
+node tools/prime-feeder.js                                                    # continuous events
+OPENQ_PRIME_CEP=127.0.0.1:5074 npm start
+```
+
+`modules/primefinance/simulator.q` is a one-shot demo;
+`tools/prime-feeder.js` drives a continuous stream (inventory refreshes,
+short positions, borrows, recalls onto the tp; locate requests via a
+`runLocate` IPC wrapper on the CEP, since locates aren't wired to any tp event).
+
+## Spreads (the dashboard's Spreads page)
+
+openQ's **spread** module CEP loads `analytics/spread.q` and keeps the latest
+composed quote per (sym, aggression, marketStatus) in `.spread.snap` — each
+quote already broken into 7 named build-up components. `GET /api/spread` reads
+it off the CEP and returns the overall attribution, per-symbol and per-regime
+build-up, widest keys, and per-symbol percentiles.
+
+```bash
+Q_BIN=/path/to/q bash ../../openQ/scripts/startupAllByModule.sh spread   # CEP on :5059
+node tools/spread-feeder.js                                              # synthetic spreadQuote grid
+OPENQ_SPREAD_CEP=127.0.0.1:5059 npm start
+```
+
+Component values are stored as price fractions; the endpoint reports bps
+(`1e4 ×`), matching `analytics/spread.q`'s own `contributionBps`.
 
 ## Process monitoring (the dashboard's Processes page)
 
@@ -281,9 +354,14 @@ src/qGateway.js      the connection pool + async-reply correlation
 src/stream.js        .u.sub bridge → "tick" events
 src/logs.js          read + parse openQ's .log files for /api/logs
 src/markout.js       read the markout CEP's .markout/.impact state for /api/markout
+src/spread.js        read the spread CEP's .spread.snap for /api/spread
+src/report.js        read the report CEP's .report.latest for /api/report
+src/prime.js         read the primefinance CEP's .prime.* state for /api/prime
 src/tables.js        survey each pipeline's RDB for the /api/tables inventory
 src/server.js        HTTP routes + WebSocket wiring
 scripts/smoke.js     one-shot query check
 tools/pidstat-feeder.js  Windows stand-in for modules/mon/pidstat_poller.py
 tools/markout-feeder.js  correlated trade/order/rate feed for the markout module
+tools/spread-feeder.js   synthetic spreadQuote grid for the spread module
+tools/prime-feeder.js    continuous securities-finance events for the primefinance module
 ```
