@@ -5,7 +5,7 @@ import {
   Gauge, LayoutDashboard, ListFilter, MemoryStick, Network, Play, RefreshCw,
   ScrollText, Search, Settings, ShieldCheck, TrendingDown, TrendingUp, Wifi
 } from "lucide-react";
-import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid, AreaChart, Area } from "recharts";
+import { LineChart, Line, XAxis, YAxis, Tooltip, Legend, ReferenceLine, ResponsiveContainer, CartesianGrid, AreaChart, Area } from "recharts";
 import "./index.css";
 
 // Base URL of the openq-dashboard-gateway (see ../gateway). Falls back to the
@@ -33,9 +33,8 @@ const impact = Array.from({length: 31}, (_,i) => {
 
 function Nav({active,setActive}) {
   const items = [
-    ["Overview",LayoutDashboard],["Orders",ListFilter],["Algorithms",Gauge],
-    ["Positions",Network],["Executions",Activity],["Market Impact",BarChart3],
-    ["Processes",Cpu],["Logs",ScrollText]
+    ["Overview",LayoutDashboard],["Logs",ScrollText],["Market Impact",BarChart3],
+    ["Markout",TrendingUp],["Processes",Cpu],["Tables",Database]
   ];
   return <aside className="w-60 shrink-0 border-r border-slate-800 bg-[#08121a] p-4">
     <div className="mb-7 flex items-center gap-2 px-2">
@@ -117,6 +116,237 @@ function Impact() {
       {["EURUSD","USDJPY","GBPUSD"].map((s,i)=><div className="panel p-4" key={s}><div className="flex justify-between"><span className="font-semibold">{s}</span><span className="badge bg-slate-800 text-slate-400">TODAY</span></div><div className="mt-4 text-xl">{[1.12,0.86,1.47][i]} <span className="text-xs text-slate-500">bps</span></div><div className="mt-1 text-xs text-slate-500">median impact · 1,000+ fills</div></div>)}
     </div>
   </div>
+}
+
+// ---- Tables (in-memory inventory) ------------------------------------
+function fmtBytes(b) {
+  if (b == null) return "—";
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`;
+  return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+function fmtCount(n) {
+  if (n == null) return "—";
+  return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
+}
+function ago(iso) {
+  if (!iso) return "—";
+  const s = Math.round((Date.now() - Date.parse(iso)) / 1000);
+  if (!isFinite(s)) return "—";
+  if (s < 0) return "now";
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+function tableStatus(t, sourceOnline) {
+  if (!sourceOnline) return { label: "offline", cls: "bg-rose-950 text-rose-300" };
+  if (!t.rows) return { label: "empty", cls: "bg-slate-900 text-slate-500" };
+  const age = t.lastTs ? (Date.now() - Date.parse(t.lastTs)) / 1000 : Infinity;
+  if (age < 30) return { label: "live", cls: "bg-emerald-950 text-emerald-300" };
+  if (age < 600) return { label: "recent", cls: "bg-cyan-950 text-cyan-300" };
+  return { label: "idle", cls: "bg-amber-950 text-amber-300" };
+}
+
+function Tables() {
+  const [data,setData] = useState(null);
+  const [err,setErr] = useState(null);
+  const [auto,setAuto] = useState(true);
+  const [updated,setUpdated] = useState(null);
+
+  const load = useCallback(() => {
+    fetch(new URL("/api/tables", GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if(!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!auto) return;
+    const id = setInterval(load, 3000);
+    return () => clearInterval(id);
+  }, [auto, load]);
+
+  const sources = data?.sources || [];
+  const totals = data?.totals || {};
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">in-memory table inventory · <span className="text-slate-500">one RDB per pipeline</span></span>
+      <label className="flex items-center gap-1.5 text-slate-400">
+        <input type="checkbox" checked={auto} onChange={e=>setAuto(e.target.checked)}/> auto-refresh
+      </label>
+      <button onClick={load} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900">
+        <RefreshCw size={12}/> refresh
+      </button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/tables — {err}</div>}
+
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <Metric label="Tables" value={String(totals.tables ?? "—")} delta={`${totals.online ?? 0}/${totals.sources ?? 0} sources online`} icon={Database}/>
+      <Metric label="Rows in memory" value={fmtCount(totals.rows)} delta="across all pipelines" icon={ListFilter}/>
+      <Metric label="Resident size" value={fmtBytes(totals.bytes)} delta="serialized (-22!)" icon={Gauge}/>
+      <Metric label="Pipelines" value={String(totals.sources ?? "—")} delta={`${(totals.tables && totals.online) ? "" : "some idle"}`} icon={Network}/>
+    </div>
+
+    <section className="panel overflow-hidden">
+      <div className="max-h-[64vh] overflow-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="sticky top-0 z-10 bg-[#0a121a] text-slate-500">
+            <tr>{["Pipeline / Table","Status","Rows","Cols","Size","Last update"].map(h=>
+              <th key={h} className="px-4 py-2.5 font-medium">{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            {sources.map(src => {
+              const tbls = [...(src.tables||[])].sort((a,b)=>b.rows-a.rows);
+              return <React.Fragment key={src.name}>
+                <tr className="border-t border-slate-800 bg-[#0b151e]">
+                  <td className="px-4 py-2 font-semibold text-slate-200">
+                    {src.name}
+                    <span className="ml-2 text-[10px] font-normal text-slate-500">{src.process || src.target} · {src.role || "?"}</span>
+                  </td>
+                  <td className="px-4 py-2">
+                    <span className={`badge ${src.connected ? "bg-emerald-950 text-emerald-300" : "bg-rose-950 text-rose-300"}`}>
+                      {src.connected ? "online" : "offline"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 tabular-nums text-slate-400">{fmtCount((tbls).reduce((s,t)=>s+(t.rows||0),0))}</td>
+                  <td/><td className="px-4 py-2 tabular-nums text-slate-500">{fmtBytes((tbls).reduce((s,t)=>s+(t.bytes||0),0))}</td>
+                  <td className="px-4 py-2 text-slate-600">{src.error ? <span className="text-rose-400">{src.error}</span> : ""}</td>
+                </tr>
+                {tbls.map(t => {
+                  const st = tableStatus(t, src.connected);
+                  return <tr key={src.name+"/"+t.table} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+                    <td className="px-4 py-1.5 pl-8 font-mono text-cyan-300">{t.table}</td>
+                    <td className="px-4 py-1.5"><span className={`badge ${st.cls}`}>{st.label}</span></td>
+                    <td className="px-4 py-1.5 tabular-nums text-slate-200">{t.rows?.toLocaleString() ?? "—"}</td>
+                    <td className="px-4 py-1.5 tabular-nums text-slate-500">{t.columns ?? "—"}</td>
+                    <td className="px-4 py-1.5 tabular-nums text-slate-400">{fmtBytes(t.bytes)}</td>
+                    <td className="px-4 py-1.5 text-slate-500">{ago(t.lastTs)}</td>
+                  </tr>;
+                })}
+                {src.connected && !tbls.length && <tr><td colSpan={6} className="px-4 py-2 pl-8 text-slate-600">no tables</td></tr>}
+              </React.Fragment>;
+            })}
+            {!sources.length && data && <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-600">no sources configured</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>;
+}
+
+// ---- Markout / impact --------------------------------------------------
+function fmtOffset(sec) {
+  if (sec == null) return "";
+  const a = Math.abs(sec), sign = sec < 0 ? "-" : "";
+  if (a === 0) return "0";
+  if (a < 60) return `${sign}${a % 1 ? a.toFixed(1) : a}s`;
+  const m = a / 60;
+  return `${sign}${m % 1 ? m.toFixed(1) : m}m`;
+}
+const bps1 = (v) => (v == null || !isFinite(v) ? "—" : `${v.toFixed(2)} bps`);
+
+function DecayChart({ data, dataKey, color, label }) {
+  return (
+    <div className="h-72"><ResponsiveContainer width="100%" height="100%">
+      <LineChart data={data} margin={{ top: 6, right: 12, bottom: 4, left: 0 }}>
+        <CartesianGrid stroke="#1e2b36" vertical={false}/>
+        <XAxis dataKey="label" stroke="#566673" fontSize={10} minTickGap={16}/>
+        <YAxis stroke="#566673" fontSize={10} width={44} tickFormatter={(v)=>v.toFixed(1)}/>
+        <Tooltip
+          contentStyle={{background:"#0b151e",border:"1px solid #263746",fontSize:12}}
+          formatter={(v)=>[v==null?"—":`${Number(v).toFixed(3)} bps`, label]}
+          labelFormatter={(l)=>`offset ${l}`}/>
+        <ReferenceLine y={0} stroke="#37505f"/>
+        <ReferenceLine x="0" stroke="#37505f" strokeDasharray="3 3"/>
+        <Line type="monotone" dataKey={dataKey} stroke={color} dot={false} strokeWidth={2} connectNulls isAnimationActive={false}/>
+      </LineChart>
+    </ResponsiveContainer></div>
+  );
+}
+
+function Markout() {
+  const [data,setData] = useState(null);
+  const [err,setErr] = useState(null);
+  const [auto,setAuto] = useState(true);
+  const [updated,setUpdated] = useState(null);
+
+  const load = useCallback(() => {
+    fetch(new URL("/api/markout", GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if(!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!auto) return;
+    const id = setInterval(load, 3000);
+    return () => clearInterval(id);
+  }, [auto, load]);
+
+  const mk = (data?.markout?.curve || []).map(r => ({ ...r, label: fmtOffset(r.offsetSec) }));
+  const im = (data?.impact?.curve || []).map(r => ({ ...r, label: fmtOffset(r.offsetSec) }));
+  const s = data?.summary || {};
+  const at = (curve, sec, key) => {
+    const row = curve.reduce((best,r)=> Math.abs(r.offsetSec-sec) < Math.abs((best?.offsetSec ?? 1e9)-sec) ? r : best, null);
+    return row ? row[key] : null;
+  };
+  const mkFar = at(mk, 600, "markoutBps");
+  const mkMin = at(mk, 60, "markoutBps");
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">deal markout &amp; order impact · <span className="text-slate-500">markout module CEP via gateway</span></span>
+      <label className="flex items-center gap-1.5 text-slate-400">
+        <input type="checkbox" checked={auto} onChange={e=>setAuto(e.target.checked)}/> auto-refresh
+      </label>
+      <button onClick={load} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900">
+        <RefreshCw size={12}/> refresh
+      </button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {data?.connected === false && <span className="text-amber-400">CEP disconnected</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">
+      {GW}/api/markout — {err}
+      <div className="mt-1 text-rose-400/70">needs the markout module running + a feeder (gateway/tools/markout-feeder.js) and OPENQ_MARKOUT_CEP set.</div>
+    </div>}
+
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <Metric label="Trades measured" value={String(s.mkTrades ?? "—")} delta={`${s.mkSamples ?? 0} grid samples`} icon={TrendingUp}/>
+      <Metric label="Orders measured" value={String(s.imOrders ?? "—")} delta={`${s.imSamples ?? 0} grid samples`} icon={Activity}/>
+      <Metric label="Peak impact" value={bps1(data?.impact?.peakBps)} delta="0–10s, adverse +" icon={TrendingUp}/>
+      <Metric label="Permanent impact" value={bps1(data?.impact?.permanentBps)} delta="≥30s tail" icon={ShieldCheck}/>
+    </div>
+
+    <section className="panel p-4">
+      <div className="mb-1 flex justify-between">
+        <div><div className="font-semibold">Deal markout</div><div className="text-xs text-slate-500">mid drift vs execution rate, by offset from the trade · bps</div></div>
+        <div className="text-right text-xs text-slate-500">@+1m {bps1(mkMin)}<br/>@+10m {bps1(mkFar)}</div>
+      </div>
+      <DecayChart data={mk} dataKey="markoutBps" color="#22d3ee" label="markout"/>
+    </section>
+
+    <section className="panel p-4">
+      <div className="mb-1 font-semibold">Order / execution impact</div>
+      <div className="mb-2 text-xs text-slate-500">mid move in the order's direction, −10s to +60s · bps</div>
+      <DecayChart data={im} dataKey="impactBps" color="#34d399" label="impact"/>
+    </section>
+
+    {data && !mk.length && !err && <div className="panel p-6 text-center text-sm text-slate-500">
+      No completed markout offsets yet — the curve fills left-to-right as rate ticks reach each offset (near offsets in seconds, the +10m tail after ~10 min).
+    </div>}
+  </div>;
 }
 
 // ---- Processes / pidstats ------------------------------------------------
@@ -436,17 +666,12 @@ function App() {
     return ()=>clearInterval(id);
   },[]);
   const page = useMemo(()=>{
-    if(active==="Overview") return <Overview orders={orders}/>;
+    if(active==="Tables") return <Tables/>;
     if(active==="Market Impact") return <Impact/>;
+    if(active==="Markout") return <Markout/>;
     if(active==="Processes") return <Processes/>;
     if(active==="Logs") return <Logs/>;
-    const map={
-      Orders:["Orders","Live parent/child order lifecycle, routing and execution status.",ListFilter],
-      Algorithms:["Algorithms","TWAP, VWAP, POV and liquidity-seeking algo monitoring.",Gauge],
-      Positions:["Positions","Real-time position, exposure, mark and P&L monitoring.",Network],
-      Executions:["Executions","Execution-level analytics, fills, venues and markouts.",Activity]
-    };
-    const [a,b,I]=map[active]; return <SimplePage title={a} subtitle={b} icon={I}/>;
+    return <Overview orders={orders}/>;
   },[active,orders]);
   return <div className="flex min-h-screen"><Nav active={active} setActive={setActive}/><main className="min-w-0 flex-1"><Header active={active}/><div className="p-4 md:p-6">{page}</div></main></div>
 }

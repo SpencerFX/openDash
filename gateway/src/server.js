@@ -10,6 +10,8 @@ const { StreamBridge } = require("./stream");
 const { toRows } = require("./qshape");
 const { BadInput } = require("./qlit");
 const { readLogs } = require("./logs");
+const { MarkoutReader } = require("./markout");
+const { TablesReader } = require("./tables");
 
 function send(res, status, body) {
   const text = JSON.stringify(body, null, 2);
@@ -111,6 +113,11 @@ function createServer() {
     return g;
   };
   const stream = config.stream.enabled ? new StreamBridge(config.stream) : null;
+  const markout = config.markout.enabled ? new MarkoutReader(config.markout) : null;
+  const tables =
+    config.tableSources && config.tableSources.length
+      ? new TablesReader(config.tableSources)
+      : null;
 
   const httpServer = http.createServer(async (req, res) => {
     let url;
@@ -130,7 +137,29 @@ function createServer() {
           defaultTarget: config.defaultTarget,
           gateways: Object.fromEntries([...gws].map(([n, g]) => [n, g.status()])),
           stream: stream ? stream.status() : { enabled: false },
+          markout: markout ? markout.status() : { enabled: false },
+          tables: tables ? tables.status() : { enabled: false },
         });
+      }
+
+      if (url.pathname === "/api/tables") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!tables) {
+          const e = new Error("table survey disabled (no OPENQ_TABLE_SOURCES)");
+          e.statusCode = 503;
+          throw e;
+        }
+        return send(res, 200, await tables.readAll());
+      }
+
+      if (url.pathname === "/api/markout") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!markout) {
+          const e = new Error("markout disabled (set OPENQ_MARKOUT_CEP)");
+          e.statusCode = 503;
+          throw e;
+        }
+        return send(res, 200, await markout.read());
       }
 
       if (url.pathname === "/api/query") {
@@ -245,6 +274,8 @@ function createServer() {
   async function start() {
     const starts = await Promise.all([...gws].map(async ([n, g]) => [n, await g.start()]));
     if (stream) stream.start();
+    if (markout) markout.start();
+    if (tables) tables.start();
     await new Promise((resolve) => httpServer.listen(config.port, resolve));
     return { targets: Object.fromEntries(starts) };
   }
@@ -254,9 +285,11 @@ function createServer() {
     for (const ws of wss.clients) ws.terminate();
     await Promise.all([...gws.values()].map((g) => g.stop()));
     if (stream) await stream.stop();
+    if (markout) await markout.stop();
+    if (tables) await tables.stop();
   }
 
-  return { httpServer, wss, gws, stream, start, stop };
+  return { httpServer, wss, gws, stream, markout, tables, start, stop };
 }
 
 module.exports = { createServer };
