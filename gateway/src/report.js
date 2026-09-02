@@ -23,7 +23,10 @@ class ReportReader extends CepReader {
   async read() {
     const r = await this._run();
 
-    const rows = (r.latest.rows || []).map((x) => {
+    // equities only: primefinance drives the borrow/coverage side, so a
+    // security-financed name always has a coverage `bucket`; the FX pairs
+    // that only carry spread/markout/impact have bucket = "" and are dropped.
+    const rows = (r.latest.rows || []).filter((x) => x.bucket).map((x) => {
       const spreadCostBp = num(x.spreadCostBp);
       const markoutBp = num(x.markoutBp);
       const impactBp = num(x.impactBp);

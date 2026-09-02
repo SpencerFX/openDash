@@ -28,11 +28,11 @@ const QUERIES = {
   // `.impact.completed` carries no sym, but `.impact.pending` still holds one
   // per recently-active order (grid runs to +60s) - i.e. current order flow.
   impactBySym:
-    "o2s:exec first sym by orderID from .impact.pending;" +
-    "c:select offsetSec, r:impact%mid, orderID, sym:o2s[orderID] from .impact.completed " +
-    " where orderID in key o2s, matchedTime > .z.p - 0D00:05;" +
-    "0!`sym`offsetSec xasc select impactBps:1e4*avg r, orders:count distinct orderID " +
-    " by sym,offsetSec from c",
+    "{[] o2s:exec first sym by orderID from .impact.pending;" +
+    " c:select offsetSec, r:impact%mid, orderID, sym:o2s[orderID] from .impact.completed " +
+    "  where orderID in key o2s, matchedTime > .z.p - 0D00:05;" +
+    " 0!`sym`offsetSec xasc select impactBps:1e4*avg r, orders:count distinct orderID " +
+    "  by sym,offsetSec from c}[]",
 
   summary:
     "`mkTrades`mkSamples`mkPending`imOrders`imSamples`imPending!(" +

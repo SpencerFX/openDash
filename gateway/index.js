@@ -3,6 +3,12 @@
 const config = require("./src/config");
 const { createServer } = require("./src/server");
 
+// A stray rejected promise (e.g. a background cache refresh whose q sync
+// timed out) must not take the whole gateway down - log and carry on.
+process.on("unhandledRejection", (err) => {
+  console.error("[gateway] unhandledRejection:", err && err.stack ? err.stack : err);
+});
+
 async function main() {
   const app = createServer();
   const { targets } = await app.start();

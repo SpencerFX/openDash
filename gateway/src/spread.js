@@ -15,9 +15,9 @@ const COMPONENTS = [
 
 const QUERIES = {
   summary:
-    "l:.spread.latest[]; `keys`syms`meanTotal`widestTotal!(" +
+    "{[] l:.spread.latest[]; `keys`syms`meanTotal`widestTotal!(" +
     "count .spread.snap; count distinct exec sym from l; " +
-    "$[count l; avg exec totalSprd from l; 0n]; $[count l; max exec totalSprd from l; 0n])",
+    "$[count l; avg exec totalSprd from l; 0n]; $[count l; max exec totalSprd from l; 0n])}[]",
 
   // overall build-up: one weighted row, melted to one row per component
   attribution: "0!.spread.decompose .spread.wavgBy[.spread.latest[]; `$()]",

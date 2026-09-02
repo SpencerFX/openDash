@@ -21,6 +21,17 @@ const [cepH, cepP] = (process.env.PRIME_CEP || "127.0.0.1:5074").split(":");
 const TICK_MS = 1800;
 
 // sym -> borrow profile: base fee (bp), depth, recall risk
+// px is a seed entry price, not a live one - it's what .prime.positions'
+// avgPx starts from; the real mark comes later from eq_d1_yfinance/
+// eq_m1_yfinance via modules/analytics/primeFinance/cep.q's
+// .primeMod.market.refresh (see .prime.positionRisk), same as every
+// other sym here. 0700.HK/9988.HK (HKEX, HKD) and 7203.T/6758.T (Tokyo/
+// Nikkei, JPY) are real, liquid, backfilled tickers - confirmed present
+// in eq_m1_yfinance before adding them here - giving the book genuine
+// cross-border exposure instead of an all-US universe. Their $-shaped
+// dashboard fields are actually HKD/JPY (this repo has no real FX-rate
+// feed to convert with) - see cep.q's .primeMod.market header for how
+// that's kept from silently blending into the US-only $ totals.
 const SYMS = {
   AAPL: { fee: 25, depth: 90000, recall: 0.05, px: 190 },
   MSFT: { fee: 18, depth: 80000, recall: 0.04, px: 430 },
@@ -29,6 +40,10 @@ const SYMS = {
   AMD:  { fee: 70, depth: 35000, recall: 0.10, px: 160 },
   GME:  { fee: 460, depth: 6000, recall: 0.45, px: 18 },
   AMC:  { fee: 380, depth: 8000, recall: 0.38, px: 5 },
+  "0700.HK": { fee: 20, depth: 60000, recall: 0.04, px: 430 },  // Tencent, HKD
+  "9988.HK": { fee: 35, depth: 50000, recall: 0.06, px: 105 },  // Alibaba-HK, HKD
+  "7203.T":  { fee: 15, depth: 70000, recall: 0.03, px: 3100 }, // Toyota, JPY
+  "6758.T":  { fee: 22, depth: 55000, recall: 0.05, px: 3900 }, // Sony, JPY
 };
 const SYM_NAMES = Object.keys(SYMS);
 const LENDERS = ["PB", "BANKA", "BANKB", "BANKC"];
