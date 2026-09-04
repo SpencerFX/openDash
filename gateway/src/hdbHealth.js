@@ -19,12 +19,28 @@ const { toRows } = require("./qshape");
 // changes when the scan is re-run, so read() is served from a short TTL
 // cache and refreshed in the background.
 
-// month rollup, mn = YYYYMM int. One full-archive scan per table; the
-// per-table archive totals (bytes / scanned-day / empty-day counts) are
-// summed from this in read() rather than a second scan.
-const MONTHLY = (t) =>
+// Default archive: the efx table-health scan's two output tables. A source
+// may override this (config `tabs`) - e.g. the eq HDB archive is one
+// bar-level table `tableHealthEq`, scanned by the same 05_table_health_scan.q.
+const DEFAULT_TABS = [
+  { name: "tableHealth", kind: "bar" },
+  { name: "tableHealthTick", kind: "tick" },
+];
+
+// `boundDays` scopes every scan to `where date within (.z.d-boundDays; .z.d)`.
+// The efx archive (tableHealth*) is stubbed by .Q.chk into EVERY partition of
+// the shared /mon root, so an unbounded scan is safe there (boundDays null).
+// A newer archive table like `tableHealthEq` only exists in the ~35 partitions
+// it was actually scanned into, so an unbounded scan walks into a 2009-era
+// partition with no such splay and OS-errors - it MUST be bounded.
+const win = (b) => (b ? ` where date within (.z.d-${b}; .z.d)` : "");
+
+// month rollup, mn = YYYYMM int. One archive scan per table; the per-table
+// archive totals (bytes / scanned-day / empty-day counts) are summed from
+// this in read() rather than a second scan.
+const MONTHLY = (t, b) =>
   `0!select rows:sum rowCountToday, bytes:sum bytesDisk, days:count i, emptyDays:sum status=\`EMPTY ` +
-  `by tab, mn:(100*\`year$date)+\`mm$date from ${t}`;
+  `by tab, mn:(100*\`year$date)+\`mm$date from ${t}${win(b)}`;
 
 // Newest date that actually HAS rows in this archive - not `max date` (the
 // virtual partition column), which spans the whole shared C:/data/db1/mon
@@ -33,27 +49,29 @@ const MONTHLY = (t) =>
 // pidstats), `max date` points at an empty stub and `where date=max date`
 // comes back blank. `select date from t` only yields real rows, so its max
 // is the last genuine health scan.
-const ANCHOR = (t) => `(exec max date from select date from ${t})`;
+const ANCHOR = (t, b) => `(exec max date from select date from ${t}${win(b)})`;
 
 // newest-scan row per table + the repeated whole-history summary cols
-const LATEST = (t) =>
+const LATEST = (t, b) =>
   `0!select role:first role, status:first status, rowsToday:first rowCountToday, rowsTotal:first rowCountTotal, ` +
   `bytesToday:first bytesDisk, partitionCnt:first partitionCnt, oldestDate:first oldestDate, newestDate:first newestDate, ` +
   `firstTime:first firstTime, lastTime:first lastTime, ageSec:first ageSec, scanTs:last timestamp ` +
-  `by tab from ${t} where date=${ANCHOR(t)}`;
+  `by tab from ${t} where date=${ANCHOR(t, b)}`;
 
 // daily granularity for the recent window (touches ~180 partitions only)
-const RECENT = (t) =>
-  `0!select rowsToday:first rowCountToday, bytesDisk:first bytesDisk, status:first status ` +
-  `by date, tab from ${t} where date>=${ANCHOR(t)}-180`;
+const RECENT = (t, b) =>
+  `0!select rowsToday:first rowCountToday, bytesDisk:first bytesDisk, status:first status, lastTime:first lastTime ` +
+  `by date, tab from ${t} where date>=${ANCHOR(t, b)}-180`;
 
-const QUERIES = {
-  latestBar: LATEST("tableHealth"),
-  monthlyBar: MONTHLY("tableHealth"),
-  recentBar: RECENT("tableHealth"),
-  latestTick: LATEST("tableHealthTick"),
-  monthlyTick: MONTHLY("tableHealthTick"),
-  recentTick: RECENT("tableHealthTick"),
+// { latest_<tab>, monthly_<tab>, recent_<tab> } for each configured table
+const buildQueries = (tabs, boundDays) => {
+  const q = {};
+  for (const t of tabs) {
+    q[`latest_${t.name}`] = LATEST(t.name, boundDays);
+    q[`monthly_${t.name}`] = MONTHLY(t.name, boundDays);
+    q[`recent_${t.name}`] = RECENT(t.name, boundDays);
+  }
+  return q;
 };
 
 const TTL_MS = 60000;
@@ -65,7 +83,12 @@ const mnLabel = (mn) => `${String(mn).slice(0, 4)}-${String(mn).slice(4)}`;
 
 class HdbHealthReader extends CepReader {
   constructor(opts) {
-    super(opts, QUERIES);
+    const tabs = opts.tabs && opts.tabs.length ? opts.tabs : DEFAULT_TABS;
+    const queries = buildQueries(tabs, opts.boundDays || null);
+    super(opts, queries);
+    this.tabs = tabs;
+    this.queries = queries;
+    this.boundDays = opts.boundDays || null;
     this._cache = { at: 0, data: null };
     this._inflight = null;
   }
@@ -98,9 +121,9 @@ class HdbHealthReader extends CepReader {
   async _seq() {
     const out = {};
     let ok = 0;
-    for (const name of Object.keys(QUERIES)) {
+    for (const name of Object.keys(this.queries)) {
       try {
-        out[name] = toRows(await this.session.sync(QUERIES[name]));
+        out[name] = toRows(await this.session.sync(this.queries[name]));
         ok += 1;
       } catch (e) {
         // Don't retry here - a client-side timeout leaves the query still
@@ -163,10 +186,9 @@ class HdbHealthReader extends CepReader {
         emptyDays: n(x.emptyDays) || 0,
       }));
 
-    const monthly = [
-      ...monthlyOf(r.monthlyBar.rows, "bar"),
-      ...monthlyOf(r.monthlyTick.rows, "tick"),
-    ].sort((a, b) => a.mn - b.mn);
+    const monthly = this.tabs
+      .flatMap((t) => monthlyOf((r[`monthly_${t.name}`] || {}).rows, t.kind))
+      .sort((a, b) => a.mn - b.mn);
 
     // per-tab archive totals, summed from the month rollup
     const arch = new Map();
@@ -178,24 +200,59 @@ class HdbHealthReader extends CepReader {
       arch.set(m.tab, a);
     }
 
+    const recentOf = (rows, kind) =>
+      (rows || []).map((x) => ({
+        kind,
+        tab: x.tab,
+        date: day(x.date),
+        rowsToday: n(x.rowsToday) || 0,
+        bytesDisk: n(x.bytesDisk) || 0,
+        status: x.status || null,
+        lastTime: iso(x.lastTime),
+      }));
+
+    const recent = this.tabs
+      .flatMap((t) => recentOf((r[`recent_${t.name}`] || {}).rows, t.kind))
+      .sort((a, b) => (a.date < b.date ? -1 : 1));
+
+    // For a bounded archive (eq history) the stored oldest/newest/partitionCnt
+    // come from .oq.hk.scanHDB counting .Q.chk stub dirs across the whole
+    // /mon root - i.e. 2010-01-04 / ~4200 partitions, which is nonsense for a
+    // 1-month-old table. And its LATEST row is anchored on today, which for a
+    // live-growing HDB may be an in-progress (0-row) partition, flagging a
+    // real table EMPTY. Recompute the honest range + latest-with-data from
+    // the days that actually carry rows in the bounded recent window.
+    const realRange = new Map();
+    if (this.boundDays) {
+      for (const x of recent) {
+        if (!x.rowsToday) continue;
+        const cur = realRange.get(x.tab) || { oldest: x.date, newest: x.date, dataDays: 0, newestRows: 0, newestBytes: 0, newestLastTime: null };
+        if (x.date < cur.oldest) cur.oldest = x.date;
+        if (x.date >= cur.newest) { cur.newest = x.date; cur.newestRows = x.rowsToday; cur.newestBytes = x.bytesDisk; cur.newestLastTime = x.lastTime; }
+        cur.dataDays += 1;
+        realRange.set(x.tab, cur);
+      }
+    }
+
     const latestOf = (rows, kind) =>
       (rows || []).map((x) => {
         const a = arch.get(x.tab) || { bytesArchive: null, scannedDays: 0, emptyDays: 0 };
-        const oldest = day(x.oldestDate);
-        const newest = day(x.newestDate);
+        const rr = realRange.get(x.tab);
+        const oldest = rr ? rr.oldest : day(x.oldestDate);
+        const newest = rr ? rr.newest : day(x.newestDate);
         const spanDays =
           oldest && newest ? Math.round((Date.parse(newest) - Date.parse(oldest)) / DAY_MS) + 1 : null;
-        const partitionCnt = n(x.partitionCnt) || 0;
+        const partitionCnt = rr ? rr.dataDays : n(x.partitionCnt) || 0;
         const healthyDays = Math.max(0, a.scannedDays - a.emptyDays);
         return {
           tab: x.tab,
           kind, // "bar" | "tick"
           role: x.role || null,
-          status: x.status || null,
+          status: rr ? "HEALTHY" : x.status || null,
           rowsTotal: n(x.rowsTotal),
-          rowsToday: n(x.rowsToday),
+          rowsToday: rr ? rr.newestRows : n(x.rowsToday),
           bytesArchive: a.bytesArchive,
-          bytesToday: n(x.bytesToday),
+          bytesToday: rr ? rr.newestBytes : n(x.bytesToday),
           partitionCnt,
           scannedDays: a.scannedDays,
           emptyDays: a.emptyDays,
@@ -206,31 +263,15 @@ class HdbHealthReader extends CepReader {
           newestDate: newest,
           spanDays,
           firstTime: iso(x.firstTime),
-          lastTime: iso(x.lastTime),
-          ageSec: n(x.ageSec),
+          lastTime: rr && rr.newestLastTime ? rr.newestLastTime : iso(x.lastTime),
+          ageSec: rr && rr.newestLastTime ? (Date.now() - Date.parse(rr.newestLastTime)) / 1000 : n(x.ageSec),
           scanTs: iso(x.scanTs),
         };
       });
 
-    const tables = [
-      ...latestOf(r.latestBar.rows, "bar"),
-      ...latestOf(r.latestTick.rows, "tick"),
-    ].sort((a, b) => (b.rowsTotal || 0) - (a.rowsTotal || 0));
-
-    const recentOf = (rows, kind) =>
-      (rows || []).map((x) => ({
-        kind,
-        tab: x.tab,
-        date: day(x.date),
-        rowsToday: n(x.rowsToday) || 0,
-        bytesDisk: n(x.bytesDisk) || 0,
-        status: x.status || null,
-      }));
-
-    const recent = [
-      ...recentOf(r.recentBar.rows, "bar"),
-      ...recentOf(r.recentTick.rows, "tick"),
-    ].sort((a, b) => (a.date < b.date ? -1 : 1));
+    const tables = this.tabs
+      .flatMap((t) => latestOf((r[`latest_${t.name}`] || {}).rows, t.kind))
+      .sort((a, b) => (b.rowsTotal || 0) - (a.rowsTotal || 0));
 
     const oldest = tables.map((t) => t.oldestDate).filter(Boolean).sort()[0] || null;
     const newest = tables.map((t) => t.newestDate).filter(Boolean).sort().slice(-1)[0] || null;
@@ -368,7 +409,7 @@ class HdbHealthManager {
     this.readers = new Map();
     this.meta = [];
     for (const s of cfg.sources) {
-      const opts = { host: s.host, port: s.port, timeoutMs: cfg.timeoutMs };
+      const opts = { host: s.host, port: s.port, timeoutMs: cfg.timeoutMs, tabs: s.tabs || null, boundDays: s.boundDays || null };
       this.readers.set(s.name, s.kind === "archive" ? new HdbHealthReader(opts) : new LiveHdbReader(opts));
       this.meta.push({ name: s.name, kind: s.kind, target: `${s.host}:${s.port}` });
     }

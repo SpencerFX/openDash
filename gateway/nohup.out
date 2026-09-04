@@ -1,0 +1,4 @@
+[gateway] listening on http://localhost:8899
+[gateway] target main (default) -> 127.0.0.1:5013 - 4/4 pooled connections up
+[gateway] target mon -> 127.0.0.1:5025 - 4/4 pooled connections up
+[gateway] streaming from 127.0.0.1:5010 (ws /stream)

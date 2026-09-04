@@ -64,8 +64,9 @@ All via env (or `.env`, same keys). Defaults in `.env.example`. Key ones:
 | `OPENQ_OHLC_STREAM` / `_TABLE` / `_PRICE` | `127.0.0.1:5030` / `rate` / `mid` | the price feed the eFX Charts page buckets |
 | `OPENQ_OHLC_SYMS` | `EURUSD,GBPUSD,AUDUSD,NZDUSD,EURGBP` | currency-pair allow-list for `/api/ohlc`; empty ⇒ 6-upper-letter FX shape check |
 | `OPENQ_EQ_HDB` / `_TABLE` / `_MAX_DAYS` | `127.0.0.1:5090` / `eq_m1_yfinance` / `21` | `eq_hdb` for the EQ > Charts page (`/api/eq/*`); `off`/`none`/`0` disables |
-| `OPENQ_HDBHEALTH` | `127.0.0.1:5023` | `mon_hdb` — the `/api/hdbhealth` `archive` + `mon` sources; `off`/`none`/`0` to disable |
-| `OPENQ_HDBHEALTH_SOURCES` | *(archive+mon+eq)* | override the source list: `name=host:port[:archive\|live],…` |
+| `OPENQ_HDBHEALTH` | `127.0.0.1:5023` | `mon_hdb` — serves all three `/api/hdbhealth` sources (`archive`, `eq`, `mon`); `off`/`none`/`0` to disable |
+| `OPENQ_HDBHEALTH_SOURCES` | *(archive+eq+mon)* | override the source list: `name=host:port[:archive\|live],…` |
+| `OPENQ_HDBHEALTH_EQ_BOUND_DAYS` | `400` | lookback window for the bounded `eq` (`tableHealthEq`) archive scan |
 | `OPENQ_LOG_DIR` | `../../openQ/scripts/logs` | dir of openQ's per-role `.log` files, for `/api/logs` |
 | `OPENQ_LOG_FILES` | core roles + `bymod_*` | which `<name>.log` to surface — exact names and/or `prefix*` globs; `*` for all |
 | `OPENQ_TESTS_DIR` | `../../openQ/tests` | openQ's `tests/` dir — `/api/tests` reads `logs/results/`, `POST /api/tests/run` runs `sh/run_all.sh` |
@@ -189,6 +190,94 @@ timestamp)`. No parameters.
 | `OPENQ_PIDSTATS_RDB` | `127.0.0.1:5021,127.0.0.1:5101` | comma list of mon RDB instances; `off`/`none`/`0` disables `/api/pidstats` |
 | `OPENQ_PIDSTATS_TABLE` | `pidstats` | table name |
 | `OPENQ_PIDSTATS_TIMEOUT_MS` | `8000` | per-instance query timeout |
+
+### `GET /api/jobstatus`
+
+The mon **`jobStatus`** table (`modules/mon/jobStatus.q` → `schema_mon.q`) for
+the **JobStatus** page: two rows per job run (`RUNNING` at
+`.mon.job.start`, `SUCCESS`/`FAILED` at `.mon.job.end`), each carrying
+`jobName`, the publishing process's `-name` (`sym`), and start/end/
+duration. Three sources, unioned + deduped: **realtime** off the mon RDB
+pair (`OPENQ_JOBSTATUS_RDB`), **staged** rows off the mon IDB
+(`OPENQ_JOBSTATUS_IDB` — every numbered `jobStatus` splay under
+`.oq.idb.root`, so a job that already fell off the RDB but hasn't been
+promoted to the HDB yet — i.e. anything that ran earlier the same day —
+still shows), and **history** off the mon HDB (`OPENQ_JOBSTATUS_HDB`).
+The HDB query is skipped when `jobStatus` isn't registered there and
+anchors on `exec max date from select date from jobStatus` (real rows
+only). Rows are folded into one record per run — the latest event
+timestamp wins, so an end row supersedes its start row.
+
+`?days=<1..120>` sets the HDB lookback (default `OPENQ_JOBSTATUS_HIST_DAYS`).
+
+```json
+{
+  "connected": true, "days": 7, "rdbConnected": true, "hdbConnected": true,
+  "count": 12,
+  "rows":    [{ "timestamp": 0, "sym": "mon_housekeeping", "jobName": "monEod",
+                "startTime": 0, "endTime": 0, "durationMs": 4123, "status": "SUCCESS" }],
+  "runs":    [{ "sym": "…", "jobName": "monEod", "startTime": 0, "endTime": 0,
+                "durationMs": 4123, "status": "SUCCESS", "live": false }],
+  "running": [{ "jobName": "…", "sym": "…", "startTime": 0, "elapsedMs": 900 }],
+  "summary": { "runs": 6, "jobs": 2, "procs": 2, "running": 0, "success": 5, "failed": 1,
+               "successRate": 0.83, "avgDurationMs": 3800, "p95DurationMs": 6200,
+               "maxDurationMs": 6200, "last24h": { "runs": 2, "success": 2, "failed": 0, "running": 0 } }
+}
+```
+
+| env | default | meaning |
+| --- | --- | --- |
+| `OPENQ_JOBSTATUS_RDB` | `127.0.0.1:5021,127.0.0.1:5101` | mon RDB instances for realtime; `off`/`none`/`0` disables `/api/jobstatus` |
+| `OPENQ_JOBSTATUS_IDB` | `127.0.0.1:5022` | mon IDB for staged-but-unpromoted rows (jobs that ran earlier today); `off` skips it |
+| `OPENQ_JOBSTATUS_HDB` | `127.0.0.1:5023` | mon HDB for history; `off` skips the historical query |
+| `OPENQ_JOBSTATUS_HIST_DAYS` | `14` | default HDB lookback (client `?days=` overrides, capped 120) |
+| `OPENQ_JOBSTATUS_TIMEOUT_MS` | `8000` | per-endpoint query timeout |
+
+### `GET /api/timers`
+
+Every openQ process's scheduled work for the **SystemAdmin → Timers** page.
+openQ layers a multi-timer scheduler over kdb+'s single `.z.ts`
+(`core/utils/timer.q`, in every process's `utilities`), keeping one keyed
+table `.util.timer.tab` (`id added start end frequency func lastRun nextRun
+active mode info`). This reader has **no persistent connections and no
+endpoint list of its own** — it reuses the Modules `cfg_proc` topology and
+does one short-lived IPC probe per live node port that pulls
+`.util.timer.tab`, then rolls the rows up per process, per module and
+platform-wide. `func` (stored as a projection like `` @[`.util.conn.cleanup] ``)
+is reduced to the bare callback name; `mode` is `DEF` (after finish) /
+`REL` (after start) / `ABS` (fixed grid) / `ONCE`. No parameters.
+`OPENQ_TIMERS=off` disables the route.
+
+```json
+{
+  "asOf": "2026-09-03T09:32:06.365Z", "host": "127.0.0.1",
+  "overview": { "processes": 55, "processesUp": 41, "processesWithTimers": 41,
+                "totalTimers": 164, "activeTimers": 164, "inactiveTimers": 0,
+                "distinctFunctions": 17, "overdueTimers": 0, "modules": 9,
+                "byMode": { "DEF": 145, "REL": 19 },
+                "fastestFreqMs": 1000, "slowestFreqMs": 900000 },
+  "modules":  [{ "name": "mon", "label": "mon", "procCount": 8, "procUp": 8,
+                 "procsWithTimers": 8, "timerCount": 22, "activeCount": 22, "overdueCount": 0,
+                 "procs": [{ "module": "mon", "name": "mon_tp", "role": "tp", "port": 5020,
+                             "up": true, "timerCount": 2, "activeCount": 2, "overdueCount": 0,
+                             "timers": [{ "id": 1, "fn": ".util.conn.cleanup",
+                                          "label": ".util.conn.cleanup", "mode": "DEF", "active": true,
+                                          "freqMs": 10000, "freqHuman": "10s",
+                                          "added": "…", "lastRun": "…", "nextRun": "…",
+                                          "lastRunAgoMs": 4200, "dueInMs": 5800, "overdue": false }] }] }],
+  "functions":[{ "fn": ".util.conn.cleanup", "count": 41, "activeCount": 41, "procs": 41,
+                 "minFreqMs": 10000, "minFreqHuman": "10s" }],
+  "upcoming": [{ "proc": "mon_tp", "module": "mon", "fn": ".util.conn.cleanup", "mode": "DEF",
+                 "nextRun": "…", "dueInMs": 793, "freqMs": 10000, "freqHuman": "10s", "overdue": false }],
+  "overdue":  []
+}
+```
+
+| env | default | meaning |
+| --- | --- | --- |
+| `OPENQ_TIMERS` | `on` | `off`/`none`/`0` disables `/api/timers` and hides the page |
+| `OPENQ_TIMERS_HOST` | `127.0.0.1` | host to probe every node on |
+| `OPENQ_TIMERS_TIMEOUT_MS` | `2500` | per-node probe timeout |
 
 ### `GET /api/markout`
 
@@ -344,7 +433,7 @@ symbol is absent from a domain). The endpoint adds an `allInBp` per row and
 by-bucket / totals rollups. No parameters. Enabled only when
 `OPENQ_REPORT_CEP` is set. The dashboard's **Desk Risk** page renders it.
 
-### `GET /api/hdbhealth` &nbsp;·&nbsp; `?source=archive|mon|eq`
+### `GET /api/hdbhealth` &nbsp;·&nbsp; `?source=archive|eq|mon`
 
 Selectable **sources** — one button each on the HDB Health page (the
 response carries the full `sources` list `[{name, kind, target}]` and the
@@ -354,11 +443,11 @@ resolved `source`; an unknown `?source=` falls back to the default,
 | `source` | kind | what |
 | --- | --- | --- |
 | `archive` *(default)* | archive | the on-disk `tableHealth` / `tableHealthTick` scan archive `examples/scripts/05_table_health_scan.q` writes under `C:/data/db1/mon` (one row per `(tab, date)`, `.oq.hk.tableHealth` shape), read off `mon_hdb` |
-| `mon` | live | a **live** scan of `mon_hdb`'s own `.Q.pt` tables (`logs`, `pidstats`, `tableHealth`, `tableHealthTick`) |
-| `eq` | live | a **live** scan of `eq_hdb` (`eq_d1_yfinance`, `eq_m1_yfinance`) |
+| `eq` | archive | the `tableHealthEq` scan archive (same `05_table_health_scan.q`, `-hdbroot C:/data/db1/eq -schema schemas/schema_eq_scan.q -savetab tableHealthEq`), the 3 minute-bar tables. A single "eq HDB" source with the same rows-per-month / archive-completeness / rows-per-day panels as `archive` — the old live `.Q.pt` scan of `eq_hdb` had none of those. Also written into `C:/data/db1/mon` so it is read off `mon_hdb`, but only the ~35 partitions it was scanned into carry that splay, so the reader stays **bounded** (`OPENQ_HDBHEALTH_EQ_BOUND_DAYS`, default 400) and re-derives the honest date range / partition count / latest-with-data status from the bounded `recent` window (the scan's own stored `oldestDate` counts `.Q.chk` stub dirs across the whole `/mon` root). Re-run the scan after an EOD to refresh it. |
+| `mon` | live | a **live** scan of `mon_hdb`'s own `.Q.pt` tables (`logs`, `pidstats`, `tableHealth`, `tableHealthTick`, `tableHealthEq`) |
 
 Override the set with `OPENQ_HDBHEALTH_SOURCES="name=host:port[:archive|live],…"`;
-otherwise `OPENQ_HDBHEALTH` is the archive+mon target and `OPENQ_EQ_HDB` the eq target.
+otherwise `OPENQ_HDBHEALTH` is the `archive`/`eq`/`mon` target (all read off `mon_hdb`).
 
 A **live** scan walks the HDB process's `.Q.pt` right now — per table:
 partition count (with data), total rows, rows in the newest partition,
@@ -812,8 +901,10 @@ src/ohlc.js          rolling OHLC ring from a .u.sub price feed for /api/ohlc
 src/eqOhlc.js         eq_m1_yfinance minute bars off eq_hdb for /api/eq/*
 src/queryMon.js       .util.gw.queue/.servers rollup per gateway for /api/querymon
 src/pidstats.js       live pidstats off the mon RDB pair (unioned) for /api/pidstats
+src/jobStatus.js      mon `jobStatus` table - realtime (mon RDB pair) + staged (mon IDB segments) + history (mon HDB) - for /api/jobstatus
+src/timers.js        every process's .util.timer.tab via a probe per cfg_proc node (reuses Modules topology) for /api/timers
 src/report.js        read the report CEP's .report.latest for /api/report
-src/hdbHealth.js     /api/hdbhealth sources: tableHealth archive off mon_hdb + live .Q.pt scans of mon_hdb / eq_hdb (TTL-cached)
+src/hdbHealth.js     /api/hdbhealth sources: tableHealth / tableHealthEq archives off mon_hdb + a live .Q.pt scan of mon_hdb (TTL-cached)
 src/prime.js         read the primefinance CEP's .prime.* state for /api/prime
 src/tables.js        /api/tables inventory: each pipeline's RDB pair (per-table max across active/standby), each IDB's staged-since-EOD segment counts, + HDBs
 src/explore.js       /api/explore - guarded ad-hoc `select` against any RDB/HDB tableSource (sym/time/order/limit filters, all q-literalised; no free-text where)
