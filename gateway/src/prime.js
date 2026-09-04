@@ -14,7 +14,7 @@ const QUERIES = {
     "count .prime.inventory; count .prime.locates; count .prime.positions;" +
     "count .prime.borrows; count .prime.recalls; count .prime.reservations;" +
     "count select from .prime.buyins where status=`OPEN; count .prime.alerts;" +
-    "0^neg sum exec qty from .prime.positions where qty<0;" +
+    "0^neg sum exec qty from 0!(select qty:last qty by client,sym from `timestamp xasc .prime.positions) where qty<0;" +
     "0^sum exec last available by sym,lender from `timestamp xasc .prime.inventory)",
 
   coverage: "0!.prime.positionCoverage[.prime.positions;.prime.locates;.z.p]",
@@ -45,6 +45,16 @@ const QUERIES = {
   calibration: "0!.prime.calibration",
   positionRisk: "0!.prime.positionRisk",
   crowding: "0!.prime.crowding",
+
+  // Counterparty (lender) credit-limit exposure - .prime.expo.build in
+  // modules/analytics/primeFinance/primeFinance.q, rebuilt by the CEP's
+  // .primeMod.market.refresh alongside calibration/positionRisk/crowding.
+  // `lenders` is the reference table it joins against (rating / credit
+  // limit / margin factor, seeded in cep.q). Optional, same as the three
+  // above - empty (not a missing global) on an older CEP or before the
+  // first market-data refresh.
+  exposure: "0!.prime.exposure",
+  lenders: "0!.prime.lenders",
 };
 
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
@@ -55,7 +65,7 @@ class PrimeReader extends CepReader {
   }
 
   async read() {
-    const r = await this._run({ optional: ["calibration", "positionRisk", "crowding"] });
+    const r = await this._run({ optional: ["calibration", "positionRisk", "crowding", "exposure", "lenders"] });
     const s = r.summary.value || {};
     const covRows = r.coverage.rows || [];
 
@@ -252,6 +262,30 @@ class PrimeReader extends CepReader {
         shortValue: row.shortValue == null ? null : Number(row.shortValue),
         daysToCover: row.daysToCover == null ? null : Number(row.daysToCover),
         bucket: row.bucket,
+      })),
+
+      // Counterparty exposure - one row per (lender, ccy) with an active
+      // borrow; $ figures per-ccy (no real FX feed - see prime.js header).
+      exposure: (r.exposure.rows || []).map((row) => ({
+        lender: row.lender,
+        ccy: row.ccy,
+        grossExposure: Number(row.grossExposure) || 0,
+        creditRating: row.creditRating || null,
+        creditLimit: row.creditLimit == null ? null : Number(row.creditLimit),
+        marginFactor: row.marginFactor == null ? null : Number(row.marginFactor),
+        marginRequirement: row.marginRequirement == null ? null : Number(row.marginRequirement),
+        utilizationPct: row.utilizationPct == null ? null : Number(row.utilizationPct),
+        headroom: row.headroom == null ? null : Number(row.headroom),
+        breach: row.breach === true || row.breach === 1,
+      })),
+      // Lender reference (rating / credit limit / margin factor), keyed by
+      // lender - so the page can show every counterparty even those with no
+      // active borrow (0 exposure, full headroom).
+      lenders: (r.lenders.rows || []).map((row) => ({
+        lender: row.lender,
+        creditRating: row.creditRating || null,
+        creditLimit: row.creditLimit == null ? null : Number(row.creditLimit),
+        marginFactor: row.marginFactor == null ? null : Number(row.marginFactor),
       })),
     };
   }

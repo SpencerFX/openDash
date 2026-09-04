@@ -23,7 +23,10 @@ const { QSession } = require("./qSession");
 // BRK-B). qlit.symbolLit rejects the dot / leading digit, so the query
 // uses `$"<sym>" and this regex is the whole guard against injection.
 const SYM_RE = /^[0-9A-Za-z.\-]{1,14}$/;
-const SYM_TTL_MS = 5 * 60 * 1000;
+// Short TTL so a newly-loaded exchange / partition shows up in the symbol
+// picker within a minute rather than up to 5 - the query is one grouped
+// scan of a single partition, cheap to re-run.
+const SYM_TTL_MS = 60 * 1000;
 
 const toMs = (v) => (v instanceof Date ? v.getTime() : v == null ? null : Date.parse(v));
 

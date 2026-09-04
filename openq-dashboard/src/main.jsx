@@ -2,12 +2,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createRoot } from "react-dom/client";
 import {
   Activity, Archive, ArrowDown, ArrowUp, BarChart3, Bell, BookText, Boxes, CandlestickChart, Check,
-  ChevronRight, CircleDollarSign, Cpu, Database, FastForward, Gauge, HardDrive, KeyRound, LayoutDashboard,
-  Library, ListChecks, ListFilter, Lock, MemoryStick, Network, Pause, Play, Power, RefreshCw, Rocket,
-  Radar, RotateCw, ScrollText, Search, Settings, ShieldCheck, Square, Trash2, TrendingDown, TrendingUp,
+  ChevronRight, CircleDollarSign, Cpu, Database, FastForward, Gauge, HardDrive, History, KeyRound, Landmark, LayoutDashboard,
+  Layers, Library, ListChecks, ListFilter, Lock, MemoryStick, Network, Pause, Play, Power, RefreshCw, Rocket,
+  Radar, RotateCw, ScrollText, Search, Settings, ShieldCheck, Square, Timer, Trash2, TrendingDown, TrendingUp,
   Unlock, Wifi, X, Zap
 } from "lucide-react";
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, ZAxis, Tooltip, Legend, ReferenceLine, ResponsiveContainer, CartesianGrid, AreaChart, Area, ScatterChart, Scatter, Cell } from "recharts";
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, ZAxis, Tooltip, Legend, ReferenceLine, ResponsiveContainer, CartesianGrid, AreaChart, Area, ScatterChart, Scatter, Cell, Treemap, RadialBarChart, RadialBar, PolarAngleAxis, PolarGrid } from "recharts";
 import { createChart, CandlestickSeries, LineSeries, HistogramSeries, ColorType, CrosshairMode } from "lightweight-charts";
 import "./index.css";
 
@@ -36,13 +36,13 @@ const NAV = [
       ["Charts", CandlestickChart], ["Market Impact", BarChart3], ["Markout", TrendingUp], ["Spreads", TrendingDown] ] },
   { kind: "group", name: "EQ", icon: CircleDollarSign, children: [
       ["EQ Charts", CandlestickChart], ["Desk Risk", ShieldCheck], ["Prime Finance", CircleDollarSign],
-      ["Fee Calibration", Gauge], ["Position Risk", Archive], ["Crowding", Boxes] ] },
+      ["Fee Calibration", Gauge], ["Position Risk", Archive], ["Crowding", Boxes], ["Counterparty", Landmark] ] },
   { kind: "group", name: "Data", icon: Library, children: [
       ["Catalog", BookText], ["Explorer", Search] ] },
   { kind: "group", name: "SystemAdmin", icon: Settings, children: [
-      ["Control", Power], ["Launcher", Rocket], ["Tests", ListChecks] ] },
+      ["Control", Power], ["Launcher", Rocket], ["Tests", ListChecks], ["Timers", Timer] ] },
   { kind: "group", name: "SystemMon", icon: Gauge, children: [
-      ["HDB Health", HardDrive], ["Logs", ScrollText], ["Modules", Network], ["Process Mon", Activity], ["Resources", Cpu], ["Query Mon", Radar], ["Tables", Database] ] },
+      ["HDB Health", HardDrive], ["JobStatus", History], ["Logs", ScrollText], ["Modules", Network], ["Process Mon", Activity], ["Resources", Cpu], ["Query Mon", Radar], ["Tables", Database] ] },
 ];
 
 function NavLeaf({name,Icon,active,onClick,sub}) {
@@ -58,10 +58,32 @@ function Nav({active,setActive}) {
   // collapsed by default; only auto-open the group that holds the active page
   const [open,setOpen] = useState(() => (groupOf(active) || {}).name || null);
   const toggle = (nm) => setOpen(o => o === nm ? null : nm);
+  // whole-sidebar collapse (toggled by the q mark), persisted across reloads
+  const [railed,setRailed] = useState(() => { try { return localStorage.getItem("openq.nav.railed") === "1"; } catch { return false; } });
+  const setRail = (v) => { setRailed(v); try { localStorage.setItem("openq.nav.railed", v ? "1" : "0"); } catch {} };
+
+  if (railed) {
+    return <aside className="flex w-14 shrink-0 flex-col items-center border-r border-slate-800 bg-[#08121a] py-4">
+      <button onClick={()=>setRail(false)} title="Expand sidebar"
+        className="mb-6 grid h-8 w-8 place-items-center rounded bg-cyan-400 font-black text-black hover:bg-cyan-300">q</button>
+      <div className="flex flex-col gap-1">
+        {NAV.map(n => {
+          const on = n.kind === "item" ? active===n.name : n.children.some(([c])=>c===active);
+          const go = n.kind === "item" ? () => setActive(n.name) : () => { setRail(false); setOpen(n.name); };
+          return <button key={n.name} onClick={go} title={n.name}
+            className={`grid h-9 w-9 place-items-center rounded ${on ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900 hover:text-slate-200"}`}>
+            <n.icon size={17}/>
+          </button>;
+        })}
+      </div>
+      <div className="mt-auto pt-4" title="Live connection"><Wifi size={15} className="text-emerald-400"/></div>
+    </aside>;
+  }
 
   return <aside className="w-60 shrink-0 border-r border-slate-800 bg-[#08121a] p-4">
     <div className="mb-7 flex items-center gap-2 px-2">
-      <div className="grid h-8 w-8 place-items-center rounded bg-cyan-400 text-black font-black">q</div>
+      <button onClick={()=>setRail(true)} title="Collapse sidebar"
+        className="grid h-8 w-8 place-items-center rounded bg-cyan-400 font-black text-black hover:bg-cyan-300">q</button>
       <div><div className="font-bold tracking-wide">openQ</div><div className="text-[10px] text-slate-500">TRADING PLATFORM</div></div>
     </div>
     <div className="space-y-1">
@@ -134,6 +156,131 @@ function Header({active}) {
 
 function Metric({label,value,delta,icon:Icon}) {
   return <div className="metric"><div className="flex justify-between text-xs text-slate-500"><span>{label}</span><Icon size={14}/></div><div className="mt-2 text-2xl font-semibold">{value}</div><div className={`mt-1 text-xs ${delta?.startsWith("-")?"text-emerald-400":"text-cyan-300"}`}>{delta}</div></div>
+}
+
+// ---- shared analytics visuals (dark theme, no new deps) --------------
+// consistent recharts tooltip surface
+const TT = { background: "#0b151e", border: "1px solid #263746", borderRadius: 6, fontSize: 12, color: "#d9e2ea" };
+// 0..1 risk ramp: calm emerald -> cyan -> amber -> rose
+const RISK_STOPS = [[0, "#34d399"], [0.4, "#22d3ee"], [0.7, "#f59e0b"], [1, "#f43f5e"]];
+function riskColor(x) {
+  if (x == null || !isFinite(x)) return "#64748b";
+  const v = Math.max(0, Math.min(1, x));
+  let lo = RISK_STOPS[0], hi = RISK_STOPS[RISK_STOPS.length - 1];
+  for (let i = 0; i < RISK_STOPS.length - 1; i++) if (v >= RISK_STOPS[i][0] && v <= RISK_STOPS[i + 1][0]) { lo = RISK_STOPS[i]; hi = RISK_STOPS[i + 1]; break; }
+  const t = hi[0] === lo[0] ? 0 : (v - lo[0]) / (hi[0] - lo[0]);
+  const p = (a, b) => Math.round(parseInt(a, 16) + t * (parseInt(b, 16) - parseInt(a, 16)));
+  const c = (h) => [h.slice(1, 3), h.slice(3, 5), h.slice(5, 7)];
+  const [lr, lg, lb] = c(lo[1]), [hr, hg, hb] = c(hi[1]);
+  return `rgb(${p(lr, hr)},${p(lg, hg)},${p(lb, hb)})`;
+}
+const TONE = { pos: "text-emerald-400", neg: "text-rose-400", warn: "text-amber-400", info: "text-cyan-300", mute: "text-slate-300" };
+
+// richer KPI tile: optional left accent, sub-line, inline progress or split bar
+function StatTile({ label, value, sub, icon: Icon, tone = "mute", accent, bar, split }) {
+  return <div className="metric relative overflow-hidden">
+    {accent && <span className="absolute inset-y-0 left-0 w-1" style={{ background: accent }}/>}
+    <div className="flex items-start justify-between text-xs text-slate-500">
+      <span className="uppercase tracking-wide">{label}</span>
+      {Icon && <Icon size={14} className="shrink-0 text-slate-600"/>}
+    </div>
+    <div className={`mt-1.5 text-2xl font-semibold tabular-nums ${TONE[tone] || TONE.mute}`}>{value}</div>
+    {sub != null && <div className="mt-0.5 text-xs text-slate-500">{sub}</div>}
+    {bar && <div className="mt-2 h-1.5 overflow-hidden rounded bg-slate-800"><div className="h-full rounded" style={{ width: `${Math.max(0, Math.min(100, bar.pct))}%`, background: bar.color || "#22d3ee" }}/></div>}
+    {split && <SplitBar segments={split} height={6} className="mt-2"/>}
+  </div>;
+}
+
+// n-segment horizontal proportion bar
+function SplitBar({ segments = [], height = 8, className = "", showLegend = false }) {
+  const total = Math.max(1e-9, segments.reduce((a, s) => a + Math.max(0, s.value || 0), 0));
+  return <div className={className}>
+    <div className="flex overflow-hidden rounded" style={{ height }}>
+      {segments.map((s, i) => {
+        const w = (Math.max(0, s.value || 0) / total) * 100;
+        return w > 0 ? <div key={i} title={`${s.label}: ${s.value}`} style={{ width: `${w}%`, background: s.color }}/> : null;
+      })}
+    </div>
+    {showLegend && <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+      {segments.map((s, i) => <span key={i} className="flex items-center gap-1.5">
+        <span className="h-2 w-2 rounded-full" style={{ background: s.color }}/>
+        <span className="text-slate-400">{s.label}</span>
+        {s.display != null && <span className="tabular-nums text-slate-300">{s.display}</span>}
+      </span>)}
+    </div>}
+  </div>;
+}
+
+// inline table-cell bar
+function MiniBar({ pct, color = "#22d3ee", w = 48 }) {
+  return <div className="h-1.5 rounded bg-slate-800" style={{ width: w }}>
+    <div className="h-full rounded" style={{ width: `${Math.max(0, Math.min(100, pct))}%`, background: color }}/>
+  </div>;
+}
+
+// semicircular gauge, value 0..1
+function ArcGauge({ value, label, sub, color, size = 132, thresholds }) {
+  const v = value == null || !isFinite(value) ? null : Math.max(0, Math.min(1.2, value));
+  const r = size / 2 - 10, cx = size / 2, cy = size / 2;
+  const pol = (frac) => { const a = Math.PI * (1 - Math.min(1, frac)); return [cx + r * Math.cos(a), cy - r * Math.sin(a)]; };
+  const arc = (f0, f1) => { const [x0, y0] = pol(f0), [x1, y1] = pol(f1); const large = f1 - f0 > 0.5 ? 1 : 0; return `M ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1}`; };
+  const col = color || riskColor(v == null ? null : Math.min(1, v));
+  const over = v != null && v > 1;
+  return <div className="flex flex-col items-center">
+    <svg width={size} height={size / 2 + 14} viewBox={`0 0 ${size} ${size / 2 + 14}`}>
+      <path d={arc(0, 1)} fill="none" stroke="#1e2b36" strokeWidth={9} strokeLinecap="round"/>
+      {v != null && <path d={arc(0, Math.min(1, v))} fill="none" stroke={col} strokeWidth={9} strokeLinecap="round"/>}
+      {(thresholds || []).map((t, i) => { const [x, y] = pol(t); return <circle key={i} cx={x} cy={y} r={2.5} fill="#94a3b8"/>; })}
+      <text x={cx} y={cy - 2} textAnchor="middle" className="fill-slate-100" style={{ fontSize: 20, fontWeight: 700 }}>
+        {v == null ? "—" : `${Math.round(v * 100)}%`}
+      </text>
+      {over && <text x={cx} y={cy + 12} textAnchor="middle" className="fill-rose-400" style={{ fontSize: 9, fontWeight: 700 }}>OVER LIMIT</text>}
+    </svg>
+    {label && <div className="text-xs font-medium text-slate-300">{label}</div>}
+    {sub && <div className="text-[10px] text-slate-500">{sub}</div>}
+  </div>;
+}
+
+// small SVG donut for a category mix
+function Donut({ segments = [], size = 128, thickness = 16, centerLabel, centerSub }) {
+  const total = Math.max(1e-9, segments.reduce((a, s) => a + Math.max(0, s.value || 0), 0));
+  const r = size / 2 - thickness / 2, cx = size / 2, cy = size / 2, circ = 2 * Math.PI * r;
+  let acc = 0;
+  return <div className="flex items-center gap-4">
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke="#1e2b36" strokeWidth={thickness}/>
+      {segments.map((s, i) => {
+        const frac = Math.max(0, s.value || 0) / total;
+        const el = <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={s.color} strokeWidth={thickness}
+          strokeDasharray={`${frac * circ} ${circ}`} strokeDashoffset={-acc * circ}/>;
+        acc += frac; return el;
+      })}
+      {centerLabel != null && <text x={cx} y={cy} transform={`rotate(90 ${cx} ${cy})`} textAnchor="middle" dominantBaseline="middle" className="fill-slate-100" style={{ fontSize: 15, fontWeight: 700 }}>{centerLabel}</text>}
+      {centerSub != null && <text x={cx} y={cy + 15} transform={`rotate(90 ${cx} ${cy})`} textAnchor="middle" className="fill-slate-500" style={{ fontSize: 8 }}>{centerSub}</text>}
+    </svg>
+    <div className="space-y-1 text-xs">
+      {segments.map((s, i) => <div key={i} className="flex items-center gap-1.5">
+        <span className="h-2 w-2 rounded-sm" style={{ background: s.color }}/>
+        <span className="text-slate-400">{s.label}</span>
+        <span className="tabular-nums text-slate-300">{s.display != null ? s.display : s.value}</span>
+      </div>)}
+    </div>
+  </div>;
+}
+
+// shared page filter/status strip used by the analytics dashboards
+function LiveBar({ children, auto, setAuto, onRefresh, updated, connected, note }) {
+  return <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+    {children}
+    {note && <span className="text-slate-500">{note}</span>}
+    <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto-refresh</label>
+    <button onClick={onRefresh} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+    <span className="ml-auto flex items-center gap-2 text-slate-600">
+      {connected === false && <span className="text-amber-400">CEP disconnected</span>}
+      {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+      {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+    </span>
+  </section>;
 }
 
 function Overview({orders}) {
@@ -282,6 +429,246 @@ function Tests() {
         </section>
       </>
     )}
+  </div>;
+}
+
+// ---- SystemAdmin > Timers (.util.timer.tab per process) ----------
+const TIMER_MODE = {
+  DEF: { cls: "bg-cyan-950 text-cyan-300", color: "#22d3ee", hint: "deferred — refires this long after the last run finishes" },
+  REL: { cls: "bg-violet-950 text-violet-300", color: "#a78bfa", hint: "relative — refires this long after the last run started" },
+  ABS: { cls: "bg-emerald-950 text-emerald-300", color: "#34d399", hint: "absolute — fixed grid aligned to the timer's start time" },
+  ONCE: { cls: "bg-amber-950 text-amber-300", color: "#f59e0b", hint: "one-shot — runs once then deactivates" },
+};
+function fmtEvery(ms) {
+  if (ms == null || !isFinite(ms) || ms <= 0) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${+s.toFixed(s < 10 ? 1 : 0)}s`;
+  const m = s / 60;
+  if (m < 60) return `${+m.toFixed(m < 10 ? 1 : 0)}m`;
+  const h = m / 60;
+  if (h < 24) return `${+h.toFixed(h < 10 ? 1 : 0)}h`;
+  return `${+(h / 24).toFixed(1)}d`;
+}
+function dueLabel(nextRunIso) {
+  if (!nextRunIso) return { text: "—", tone: "text-slate-600" };
+  const ms = Date.parse(nextRunIso) - Date.now();
+  if (!isFinite(ms)) return { text: "—", tone: "text-slate-600" };
+  if (ms < -1500) return { text: `${fmtEvery(-ms)} overdue`, tone: "text-amber-400" };
+  if (ms < 1000) return { text: "now", tone: "text-cyan-300" };
+  return { text: `in ${fmtEvery(ms)}`, tone: ms < 5000 ? "text-cyan-300" : "text-slate-300" };
+}
+
+function Timers() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [updated, setUpdated] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [q, setQ] = useState("");
+  const [mode, setMode] = useState("all");
+  const [activeOnly, setActiveOnly] = useState(false);
+  const [opened, setOpened] = useState({});                 // module key -> true when expanded; collapsed by default
+  const [, setTick] = useState(0);                          // 1s re-render for the live countdowns
+
+  const load = useCallback(() => {
+    fetch(new URL("/api/timers", GW), { cache: "no-store" })
+      .then((r) => r.json().then((j) => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then((j) => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch((e) => setErr(e.message));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (!auto) return; const id = setInterval(load, 5000); return () => clearInterval(id); }, [auto, load]);
+  useEffect(() => { const id = setInterval(() => setTick((t) => t + 1), 1000); return () => clearInterval(id); }, []);
+
+  const ov = data?.overview || {};
+  const matches = (t, procName, moduleName) => {
+    if (activeOnly && !t.active) return false;
+    if (mode !== "all" && t.mode !== mode) return false;
+    if (q) {
+      const s = q.toLowerCase();
+      if (![t.fn, t.label, procName, moduleName].some((v) => (v || "").toLowerCase().includes(s))) return false;
+    }
+    return true;
+  };
+  const filtering = !!q || mode !== "all" || activeOnly;
+
+  const mods = useMemo(() => {
+    return (data?.modules || [])
+      .map((m) => {
+        const procs = m.procs
+          .map((p) => ({ ...p, shown: p.timers.filter((t) => matches(t, p.name, m.name)) }))
+          .filter((p) => p.shown.length || (!filtering && p.timerCount === 0));
+        return { ...m, procs, shownCount: procs.reduce((a, p) => a + p.shown.length, 0) };
+      })
+      .filter((m) => m.procs.length);
+  }, [data, q, mode, activeOnly]);
+
+  const modeSeg = ["DEF", "REL", "ABS", "ONCE"]
+    .map((k) => ({ label: k, value: ov.byMode?.[k] || 0, display: ov.byMode?.[k] || 0, color: TIMER_MODE[k].color }))
+    .filter((s) => s.value);
+
+  const setAllOpen = (v) => setOpened(v ? Object.fromEntries((data?.modules || []).map((m) => [`tm/${m.name}`, true])) : {});
+
+  return <div className="space-y-4">
+    <LiveBar auto={auto} setAuto={setAuto} onRefresh={load} updated={updated}
+      note="every cfg_proc process · .util.timer.tab via live IPC probe">
+      <Timer size={14} className="text-slate-500"/>
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="filter callback / process / module"
+        className="w-56 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 outline-none focus:border-cyan-500"/>
+      <select value={mode} onChange={(e) => setMode(e.target.value)} className="rounded border border-slate-700 bg-slate-950 px-1.5 py-1 text-slate-200">
+        <option value="all">all modes</option>
+        {["DEF", "REL", "ABS", "ONCE"].map((m) => <option key={m} value={m}>{m}</option>)}
+      </select>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={activeOnly} onChange={(e) => setActiveOnly(e.target.checked)}/> active only</label>
+      <button onClick={() => setAllOpen(false)} className="rounded border border-slate-800 px-2 py-1 text-slate-400 hover:bg-slate-900">collapse all</button>
+      <button onClick={() => setAllOpen(true)} className="rounded border border-slate-800 px-2 py-1 text-slate-400 hover:bg-slate-900">expand all</button>
+    </LiveBar>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/timers — {err}</div>}
+
+    {data && <>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <StatTile label="Timers" value={ov.totalTimers ?? 0} icon={Timer}
+          sub={`${ov.activeTimers ?? 0} active · ${ov.inactiveTimers ?? 0} idle`}/>
+        <StatTile label="Processes" value={`${ov.processesWithTimers ?? 0} / ${ov.processesUp ?? 0}`} icon={Cpu}
+          sub={`with timers / up · ${ov.modules ?? 0} modules`}/>
+        <StatTile label="Distinct jobs" value={ov.distinctFunctions ?? 0} icon={ListChecks} sub="unique callbacks"/>
+        <StatTile label="Overdue" value={ov.overdueTimers ?? 0} tone={ov.overdueTimers ? "warn" : "mute"} icon={Bell}
+          accent={ov.overdueTimers ? "#f59e0b" : undefined} sub={ov.overdueTimers ? "past nextRun" : "all on schedule"}/>
+        <StatTile label="Fastest" value={fmtEvery(ov.fastestFreqMs)} icon={Zap} sub="shortest interval"/>
+        <StatTile label="Slowest" value={fmtEvery(ov.slowestFreqMs)} icon={History} sub="longest interval"/>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-[1.35fr_1fr]">
+        <section className="panel overflow-hidden">
+          <div className="border-b border-slate-800 px-4 py-2.5 text-xs font-semibold text-slate-300">Next to fire</div>
+          <div className="max-h-80 overflow-y-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="sticky top-0 bg-[#0a121a] text-xs text-slate-500">
+                <tr>{["Due", "Process", "Callback", "Every"].map((h) => <th key={h} className="px-4 py-2 font-medium">{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {(data.upcoming || []).map((t, i) => {
+                  const d = dueLabel(t.nextRun);
+                  return <tr key={i} className="border-t border-slate-800/60">
+                    <td className={`px-4 py-1.5 tabular-nums ${d.tone}`}>{d.text}</td>
+                    <td className="px-4 py-1.5 font-mono text-slate-300">{t.proc}<span className="ml-1.5 text-[10px] text-slate-600">{t.module}</span></td>
+                    <td className="px-4 py-1.5 font-mono text-slate-400">{t.fn}</td>
+                    <td className="px-4 py-1.5 tabular-nums text-slate-500">{fmtEvery(t.freqMs)}</td>
+                  </tr>;
+                })}
+                {!(data.upcoming || []).length && <tr><td colSpan={4} className="px-4 py-6 text-center text-slate-600">no active timers</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <div className="space-y-4">
+          <section className="panel p-4">
+            <div className="mb-2 text-xs font-semibold text-slate-300">Scheduling modes</div>
+            <SplitBar segments={modeSeg} height={10} showLegend/>
+            <div className="mt-2 space-y-0.5 text-[10px] text-slate-500">
+              {["DEF", "REL", "ABS", "ONCE"].filter((k) => ov.byMode?.[k]).map((k) => <div key={k}><span className="text-slate-400">{k}</span> — {TIMER_MODE[k].hint}</div>)}
+            </div>
+          </section>
+
+          <section className="panel overflow-hidden">
+            <div className="border-b border-slate-800 px-4 py-2.5 text-xs font-semibold text-slate-300">By callback <span className="font-normal text-slate-600">— shared across processes</span></div>
+            <div className="max-h-64 overflow-y-auto">
+              <table className="w-full text-left text-sm">
+                <tbody>
+                  {(data.functions || []).map((f) => <tr key={f.fn} className="border-t border-slate-800/60">
+                    <td className="px-4 py-1.5 font-mono text-slate-400">{f.fn}</td>
+                    <td className="px-4 py-1.5 text-right tabular-nums text-slate-500">{f.minFreqHuman || "—"}</td>
+                    <td className="px-4 py-1.5 text-right tabular-nums text-slate-300">×{f.count}</td>
+                  </tr>)}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {!!(data.overdue || []).length && <section className="panel overflow-hidden">
+            <div className="border-b border-slate-800 px-4 py-2.5 text-xs font-semibold text-amber-300">Overdue</div>
+            <table className="w-full text-left text-sm">
+              <tbody>
+                {data.overdue.map((t, i) => <tr key={i} className="border-t border-slate-800/60">
+                  <td className="px-4 py-1.5 font-mono text-slate-300">{t.proc}</td>
+                  <td className="px-4 py-1.5 font-mono text-slate-400">{t.fn}</td>
+                  <td className="px-4 py-1.5 text-right tabular-nums text-amber-400">{fmtEvery(t.lateMs)} late</td>
+                </tr>)}
+              </tbody>
+            </table>
+          </section>}
+        </div>
+      </div>
+
+      <section className="panel overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-[#0a121a] text-xs text-slate-500">
+            <tr>{["Process / Callback", "Mode", "Every", "Last run", "Next", "Status"].map((h) => <th key={h} className="px-4 py-2 font-medium">{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            {mods.map((m) => {
+              const key = `tm/${m.name}`;
+              const open = !!opened[key] || filtering;   // collapsed by default; a filter reveals its matches
+              return <React.Fragment key={m.name}>
+                <tr className="cursor-pointer border-t border-slate-800 bg-[#0b151e]" onClick={() => setOpened((c) => ({ ...c, [key]: !c[key] }))}>
+                  <td className="px-4 py-2 font-semibold text-slate-200" colSpan={4}>
+                    <ChevronRight size={13} className={`mr-1 inline transition-transform ${open ? "rotate-90" : ""}`}/>
+                    {m.name}
+                    <span className="ml-2 text-[10px] font-normal text-slate-500">{m.procUp}/{m.procCount} procs up</span>
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums text-slate-400" colSpan={2}>
+                    {(filtering ? m.shownCount : m.timerCount)} timer{(filtering ? m.shownCount : m.timerCount) === 1 ? "" : "s"}
+                    {m.overdueCount ? <span className="ml-2 text-amber-400">{m.overdueCount} overdue</span> : null}
+                  </td>
+                </tr>
+                {open && m.procs.map((p) => {
+                  const rows = filtering ? p.shown : p.timers;
+                  return <React.Fragment key={`${m.name}/${p.name}`}>
+                    <tr className="border-t border-slate-800/60 bg-[#0a121a]/40">
+                      <td className="px-4 py-1.5 pl-9 font-mono text-slate-300" colSpan={2}>
+                        {p.name}
+                        {!p.up && <span className="ml-2 badge bg-rose-950 text-rose-300">down</span>}
+                        {p.standby && <span className="ml-2 text-[10px] text-slate-600">standby</span>}
+                      </td>
+                      <td className="px-4 py-1.5 text-[10px] text-slate-600">{p.role}{p.port ? ` · :${p.port}` : ""}</td>
+                      <td className="px-4 py-1.5 text-right tabular-nums text-slate-600" colSpan={3}>
+                        {p.up ? `${rows.length} timer${rows.length === 1 ? "" : "s"}` : (p.error || "unreachable")}
+                      </td>
+                    </tr>
+                    {rows.map((t) => {
+                      const md = TIMER_MODE[t.mode] || { cls: "bg-slate-800 text-slate-400" };
+                      const d = dueLabel(t.nextRun);
+                      return <tr key={t.id} className="border-t border-slate-800/40 hover:bg-slate-900/40">
+                        <td className="px-4 py-1.5 pl-16">
+                          <span className="font-mono text-slate-300">{t.fn}</span>
+                          {t.label && t.label !== t.fn && <span className="ml-2 text-[10px] text-slate-600">{t.label}</span>}
+                        </td>
+                        <td className="px-4 py-1.5"><span className={`badge ${md.cls}`}>{t.mode || "?"}</span></td>
+                        <td className="px-4 py-1.5 tabular-nums text-slate-400">{fmtEvery(t.freqMs)}</td>
+                        <td className="px-4 py-1.5 tabular-nums text-slate-500">{t.lastRun ? agoStr(t.lastRun) : "never"}</td>
+                        <td className={`px-4 py-1.5 tabular-nums ${t.active ? d.tone : "text-slate-600"}`}>{t.active ? d.text : "—"}</td>
+                        <td className="px-4 py-1.5">
+                          {!t.active
+                            ? <span className="badge bg-slate-800 text-slate-500">inactive</span>
+                            : t.overdue
+                              ? <span className="badge bg-amber-950 text-amber-300">overdue</span>
+                              : <span className="badge bg-emerald-950 text-emerald-300">scheduled</span>}
+                        </td>
+                      </tr>;
+                    })}
+                  </React.Fragment>;
+                })}
+              </React.Fragment>;
+            })}
+            {!mods.length && <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-600">
+              {filtering ? "no timers match the filter" : "no timers — is the platform up?"}
+            </td></tr>}
+          </tbody>
+        </table>
+      </section>
+    </>}
   </div>;
 }
 
@@ -1200,7 +1587,10 @@ function HDBHealth() {
   const [metric, setMetric] = useState("rows"); // rows | bytes
   const [recentKind, setRecentKind] = useState("bar");
   const [source, setSource] = useState(() => {
-    try { return localStorage.getItem("openq.hdbhealth.source") || "archive"; } catch { return "archive"; }
+    try {
+      const s = localStorage.getItem("openq.hdbhealth.source") || "archive";
+      return s === "eq_archive" ? "eq" : s; // eq HDB is now a single archive source
+    } catch { return "archive"; }
   });
 
   const load = useCallback(() => {
@@ -1237,8 +1627,12 @@ function HDBHealth() {
     return { keys, data: [...byMonth.values()].sort((a, b) => (a.month < b.month ? -1 : 1)) };
   }, [data, metric]);
 
+  // which kinds the archive actually has (efx = bar+tick; eq history = bar only)
+  const recentKinds = useMemo(() => [...new Set((data?.recent || []).map(r => r.kind))], [data]);
+  const effKind = recentKinds.includes(recentKind) ? recentKind : (recentKinds[0] || recentKind);
+
   const recent = useMemo(() => {
-    const rows = (data?.recent || []).filter(r => r.kind === recentKind);
+    const rows = (data?.recent || []).filter(r => r.kind === effKind);
     const keys = [...new Set(rows.map(r => r.tab))];
     const byDate = new Map();
     for (const r of rows) {
@@ -1247,7 +1641,7 @@ function HDBHealth() {
       byDate.set(r.date, o);
     }
     return { keys, data: [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : 1)) };
-  }, [data, recentKind]);
+  }, [data, effKind]);
 
   // per-table monthly coverage cells (green = full, red = all-empty)
   const coverageRows = useMemo(() => {
@@ -1353,7 +1747,7 @@ function HDBHealth() {
       {!isLive && <>
       <section className="panel p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="font-semibold">{metric === "rows" ? "Rows written" : "Bytes on disk"} per month <span className="text-xs font-normal text-slate-500">whole archive</span></div>
+          <div className="font-semibold">{metric === "rows" ? "Rows written" : "Bytes on disk"} per month <span className="text-xs font-normal text-slate-500">{source === "eq" ? "recent archive window" : "whole archive"}</span></div>
           <div className="flex gap-1 text-xs">
             {[["rows", "rows"], ["bytes", "bytes"]].map(([k, lbl]) => <button key={k} onClick={() => setMetric(k)}
               className={`rounded px-2 py-1 ${metric === k ? "bg-slate-700 text-slate-100" : "border border-slate-800 text-slate-400 hover:bg-slate-900"}`}>{lbl}</button>)}
@@ -1393,8 +1787,8 @@ function HDBHealth() {
         <div className="mb-3 flex items-center justify-between">
           <div className="font-semibold">Rows per day <span className="text-xs font-normal text-slate-500">last 180 days</span></div>
           <div className="flex gap-1 text-xs">
-            {["bar", "tick"].map(k => <button key={k} onClick={() => setRecentKind(k)}
-              className={`rounded px-2 py-1 ${recentKind === k ? "bg-slate-700 text-slate-100" : "border border-slate-800 text-slate-400 hover:bg-slate-900"}`}>{k}</button>)}
+            {recentKinds.length > 1 && recentKinds.map(k => <button key={k} onClick={() => setRecentKind(k)}
+              className={`rounded px-2 py-1 ${effKind === k ? "bg-slate-700 text-slate-100" : "border border-slate-800 text-slate-400 hover:bg-slate-900"}`}>{k}</button>)}
           </div>
         </div>
         <ResponsiveContainer width="100%" height={240}>
@@ -1755,11 +2149,12 @@ const iLine = (times, arr) => {
 // calls setData. `bars` (from /api/ohlc) is bucket-aligned / ascending /
 // de-duped, so time = t/1000 (UNIX sec) satisfies the lib's contract.
 // Oscillators (RSI/MACD/ATR) go in native v5 sub-panes below price.
-function LwCandles({ bars, precision = 5, indicators }) {
+function LwCandles({ bars, precision = 5, indicators, fitKey }) {
   const boxRef = useRef(null);
   const chartRef = useRef(null);
   const mainRef = useRef(null);
   const extraRef = useRef({});               // name -> ISeriesApi
+  const lastFitRef = useRef(null);           // fitKey we last fit-to-content for
   const [ohlc, setOhlc] = useState(null);    // O/H/L/C under the crosshair, or last bar
 
   const ind = indicators || {};
@@ -1829,6 +2224,7 @@ function LwCandles({ bars, precision = 5, indicators }) {
     chartRef.current = chart;
     mainRef.current = main;
     extraRef.current = E;
+    lastFitRef.current = null;   // force a fresh fit-to-content after re-create
     return () => { chart.remove(); chartRef.current = null; mainRef.current = null; extraRef.current = {}; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [precision, indKey]);
@@ -1865,10 +2261,23 @@ function LwCandles({ bars, precision = 5, indicators }) {
     }
     if (E.atr) E.atr.setData(iLine(times, iATR(highs, lows, closes, ind.atr.len || 14)));
 
+    // On a symbol / timeframe / window change (fitKey), reset both axes:
+    // fitContent() rescales the time axis to show every bar, and re-enabling
+    // autoScale rescales the price axis to the visible range. Skipped on
+    // plain auto-refresh (same fitKey) so it doesn't fight a user's zoom.
+    if (fitKey != null && fitKey !== lastFitRef.current) {
+      lastFitRef.current = fitKey;
+      try {
+        main.priceScale().applyOptions({ autoScale: true });
+        for (const s of Object.values(E)) { try { s.priceScale().applyOptions({ autoScale: true }); } catch { /* ignore */ } }
+        chartRef.current.timeScale().fitContent();
+      } catch { /* ignore */ }
+    }
+
     const last = rows[rows.length - 1];
     setOhlc(last ? { o: last.o, h: last.h, l: last.l, c: last.c } : null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bars, indKey]);
+  }, [bars, indKey, fitKey]);
 
   const px = (v) => (v == null ? "—" : v.toFixed(precision));
   const up = ohlc && ohlc.c >= ohlc.o;
@@ -1978,7 +2387,38 @@ function Charts() {
 // EQ > Charts — 1-minute candlesticks for eq_m1_yfinance (Asian equities,
 // HKEX + Tokyo/Nikkei) read straight off eq_hdb via /api/eq/*. Reuses the
 // eFX chart's <LwCandles> (indicators and all), just a different feed.
-const EQ_DAYS = [1, 3, 5, 10];
+const EQ_DAYS = [1, 3, 5, 10, 21];
+// candle timeframes - all derived from the raw 1-minute eq_m1_yfinance bars
+// (value = minutes per candle; 1440 = one UTC calendar day)
+const EQ_TF = [
+  ["1m", 1], ["5m", 5], ["10m", 10], ["15m", 15], ["30m", 30],
+  ["1h", 60], ["2h", 120], ["4h", 240], ["8h", 480], ["1d", 1440],
+];
+const EQ_TF_LONG = { 1: "1-minute", 5: "5-minute", 10: "10-minute", 15: "15-minute", 30: "30-minute", 60: "1-hour", 120: "2-hour", 240: "4-hour", 480: "8-hour", 1440: "daily" };
+// aggregate ascending 1-minute bars into tfMin-minute OHLCV candles.
+// epoch-aligned buckets (floor(t / bucketMs)); open=first, close=last,
+// high=max, low=min, volume=sum. Input already sorted by eqOhlc.bars().
+function resampleBars(bars, tfMin) {
+  if (!tfMin || tfMin <= 1) return bars || [];
+  const ms = tfMin * 60000;
+  const out = [];
+  let cur = null;
+  for (const b of [...(bars || [])].sort((a, z) => a.t - z.t)) {
+    if (b == null || !Number.isFinite(b.t) || !Number.isFinite(b.open)) continue;
+    const k = Math.floor(b.t / ms) * ms;
+    if (!cur || cur.t !== k) {
+      if (cur) out.push(cur);
+      cur = { t: k, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume || 0 };
+    } else {
+      cur.high = Math.max(cur.high, b.high);
+      cur.low = Math.min(cur.low, b.low);
+      cur.close = b.close;
+      cur.volume += b.volume || 0;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
 function eqPricePrec(v) {
   const a = Math.abs(Number(v) || 0);
   if (a >= 1000) return 1;
@@ -1992,6 +2432,8 @@ function EqCharts() {
   const [q, setQ] = useState("");
   const [sym, setSym] = useState(() => { try { return localStorage.getItem("openq.eqcharts.sym") || ""; } catch { return ""; } });
   const [days, setDays] = useState(3);
+  const [tf, setTf] = useState(() => { try { return Number(localStorage.getItem("openq.eqcharts.tf")) || 1; } catch { return 1; } });
+  useEffect(() => { try { localStorage.setItem("openq.eqcharts.tf", String(tf)); } catch { /* ignore */ } }, [tf]);
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   const [uniErr, setUniErr] = useState(null);
@@ -2028,8 +2470,11 @@ function EqCharts() {
   useEffect(() => {
     if (!auto) return;
     const id = setInterval(load, 30000);
-    return () => clearInterval(id);
-  }, [auto, load]);
+    // re-pull the symbol universe periodically so a newly-loaded exchange
+    // (e.g. today's nikkei partition landing) shows up without a manual reload
+    const uid = setInterval(loadUni, 60000);
+    return () => { clearInterval(id); clearInterval(uid); };
+  }, [auto, load, loadUni]);
 
   const shown = useMemo(() => {
     if (!uni) return [];
@@ -2041,7 +2486,11 @@ function EqCharts() {
 
   const prec = eqPricePrec(data?.last);
   const chg = data?.changePct;
-  const nBars = data?.bars?.length || 0;
+  const nRaw = data?.bars?.length || 0;
+  const bars = useMemo(() => resampleBars(data?.bars || [], tf), [data, tf]);
+  const nBars = bars.length;
+  const tfLabel = EQ_TF.find(([, v]) => v === tf)?.[0] || "1m";
+  const tfLong = EQ_TF_LONG[tf] || `${tf}-minute`;
 
   return <div className="space-y-4">
     <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
@@ -2067,8 +2516,12 @@ function EqCharts() {
         {EQ_DAYS.map(d => <button key={d} onClick={() => setDays(d)}
           className={`px-2 py-1 ${days === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
       </span>
+      <span className="flex overflow-hidden rounded border border-slate-800" title="candle timeframe — resampled from the raw 1-minute bars">
+        {EQ_TF.map(([lab, v]) => <button key={v} onClick={() => setTf(v)}
+          className={`px-1.5 py-1 ${tf === v ? "bg-cyan-500 text-slate-950 font-semibold" : "text-slate-400 hover:bg-slate-900"}`}>{lab}</button>)}
+      </span>
       <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
-      <button onClick={load} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <button onClick={() => { load(); loadUni(); }} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
       <span className="ml-auto flex items-center gap-2 text-slate-600">
         {uni && <span>{uni.count.toLocaleString()} symbols</span>}
         {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
@@ -2096,7 +2549,7 @@ function EqCharts() {
     {err && !uniErr && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/eq/bars — {err}</div>}
 
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      <Metric label="Last" value={data?.last != null ? data.last.toFixed(prec) : "—"} delta={`${nBars} 1-min bars`} icon={CandlestickChart}/>
+      <Metric label="Last" value={data?.last != null ? data.last.toFixed(prec) : "—"} delta={`${nBars} ${tfLabel} bars · ${humanCount(nRaw)} 1m`} icon={CandlestickChart}/>
       <Metric label="Change" value={chg == null ? "—" : `${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%`} delta={`last ${data?.days ?? days} sessions`} icon={chg >= 0 ? TrendingUp : TrendingDown}/>
       <Metric label="High" value={data?.hi != null ? data.hi.toFixed(prec) : "—"} delta="window" icon={TrendingUp}/>
       <Metric label="Volume" value={data?.vol != null ? humanCount(data.vol) : "—"} delta="window total" icon={BarChart3}/>
@@ -2104,11 +2557,11 @@ function EqCharts() {
 
     <section className="panel p-4">
       <div className="mb-3 flex items-baseline justify-between">
-        <div className="font-semibold">{sym || "—"} <span className="text-xs text-slate-500">{data?.exchange ? `${data.exchange} · ` : ""}1-minute OHLC</span></div>
+        <div className="font-semibold">{sym || "—"} <span className="text-xs text-slate-500">{data?.exchange ? `${data.exchange} · ` : ""}{tfLong} OHLC{tf > 1 ? " · resampled from 1m" : ""}</span></div>
         {data?.lo != null && <div className="text-xs text-slate-500">low {data.lo.toFixed(prec)}</div>}
       </div>
-      <LwCandles bars={data?.bars || []} precision={prec} indicators={ind}/>
-      {data && !nBars && <div className="pt-4 text-center text-sm text-slate-500">no minute data for {sym} in the last {days} sessions</div>}
+      <LwCandles bars={bars} precision={prec} indicators={ind} fitKey={`${sym}|${tf}|${days}`}/>
+      {data && !nRaw && <div className="pt-4 text-center text-sm text-slate-500">no minute data for {sym} in the last {days} sessions</div>}
     </section>
   </div>;
 }
@@ -2406,10 +2859,14 @@ function DeskRisk() {
       <div className="mt-1 text-rose-400/70">needs the report module running (startupAllByModule.sh report) and OPENQ_REPORT_CEP set.</div></div>}
 
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      <Metric label="Symbols" value={String(t.syms ?? "—")} delta="in the desk report" icon={ListFilter}/>
-      <Metric label="Short exposure" value={fmtCount(t.shortQty)} delta={`${fmtCount(t.locatedQty)} located`} icon={CircleDollarSign}/>
-      <Metric label="Avg all-in cost" value={t.avgAllInBp==null?"—":`${t.avgAllInBp.toFixed(1)} bps`} delta={t.maxAllInBp==null?"":`max ${t.maxAllInBp.toFixed(0)} bps`} icon={Gauge}/>
-      <Metric label="At-risk names" value={String(t.atRisk ?? 0)} delta="AT_RISK / UNLOCATED" icon={ShieldCheck}/>
+      <StatTile label="Symbols" value={String(t.syms ?? "—")} sub="in the desk report" icon={ListFilter} accent="#22d3ee"/>
+      <StatTile label="Short exposure" value={fmtCount(t.shortQty)} sub={`${fmtCount(t.locatedQty)} located`} icon={CircleDollarSign}
+        bar={t.shortQty ? { pct: (Number(t.locatedQty || 0) / Number(t.shortQty)) * 100, color: "#34d399" } : null}/>
+      <StatTile label="Avg all-in cost" value={t.avgAllInBp==null?"—":`${t.avgAllInBp.toFixed(1)} bps`} icon={Gauge}
+        sub={t.maxAllInBp==null?"":`max ${t.maxAllInBp.toFixed(0)} bps`}
+        tone={t.avgAllInBp == null ? "mute" : t.avgAllInBp > 50 ? "warn" : "mute"}/>
+      <StatTile label="At-risk names" value={String(t.atRisk ?? 0)} sub="AT_RISK / UNLOCATED" icon={ShieldCheck}
+        tone={(t.atRisk ?? 0) > 0 ? "warn" : "pos"} accent={(t.atRisk ?? 0) > 0 ? "#f59e0b" : "#34d399"}/>
     </div>
 
     <section className="panel p-4">
@@ -2526,10 +2983,18 @@ function PrimeFinance() {
       <div className="mt-1 text-rose-400/70">needs the primefinance module running + a feeder (gateway/tools/prime-feeder.js) and OPENQ_PRIME_CEP set.</div></div>}
 
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      <Metric label="Short exposure" value={s.shortValue != null ? fmtUsd(s.shortValue) : fmtCount(s.shortQty)} delta={s.shortValue != null ? `${fmtCount(s.shortQty)} shares · real mark` : `${fmtCount(s.availQty)} lendable`} icon={CircleDollarSign}/>
-      <Metric label="Locate coverage" value={pct1(s.coveragePct)} delta="located ÷ short" icon={ShieldCheck}/>
-      <Metric label="Locate fill" value={pct1(s.locateFillPct)} delta={`${s.openLocates ?? 0} open locates`} icon={ListFilter}/>
-      <Metric label="Risk events" value={String((s.openBuyins ?? 0) + (s.alerts ?? 0))} delta={`${s.openBuyins ?? 0} buy-ins · ${s.alerts ?? 0} alerts`} icon={ShieldCheck}/>
+      <StatTile label="Short exposure" icon={CircleDollarSign} accent="#22d3ee"
+        value={s.shortValue != null ? fmtUsd(s.shortValue) : fmtCount(s.shortQty)}
+        sub={s.shortValue != null ? `${fmtCount(s.shortQty)} shares · real mark` : `${fmtCount(s.availQty)} lendable`}/>
+      <StatTile label="Locate coverage" icon={ShieldCheck} value={pct1(s.coveragePct)} sub="located ÷ short"
+        tone={s.coveragePct == null ? "mute" : s.coveragePct >= 100 ? "pos" : s.coveragePct >= 80 ? "info" : "warn"}
+        bar={s.coveragePct == null ? null : { pct: Math.min(100, s.coveragePct), color: riskColor(1 - Math.min(1, (s.coveragePct || 0) / 100)) }}/>
+      <StatTile label="Locate fill" icon={ListFilter} value={pct1(s.locateFillPct)} sub={`${s.openLocates ?? 0} open locates`}
+        bar={s.locateFillPct == null ? null : { pct: Math.min(100, s.locateFillPct), color: "#22d3ee" }}/>
+      <StatTile label="Risk events" icon={ShieldCheck} value={String((s.openBuyins ?? 0) + (s.alerts ?? 0))}
+        tone={(s.openBuyins ?? 0) + (s.alerts ?? 0) > 0 ? "warn" : "pos"}
+        accent={(s.openBuyins ?? 0) > 0 ? "#f43f5e" : (s.alerts ?? 0) > 0 ? "#f59e0b" : "#34d399"}
+        sub={`${s.openBuyins ?? 0} buy-ins · ${s.alerts ?? 0} alerts`}/>
     </div>
 
     <section className="panel p-4">
@@ -2738,10 +3203,16 @@ function BorrowFeeCalibration() {
     </div>}
 
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      <Metric label="Calibrated lines" value={String(cal.length)} delta={`${new Set(cal.map(r=>r.sym)).size} symbol(s)`} icon={Gauge}/>
-      <Metric label="Rich (overpriced)" value={String(rich.length)} delta="above model fee" icon={TrendingUp}/>
-      <Metric label="Cheap (underpriced)" value={String(cheap.length)} delta="below model fee" icon={TrendingDown}/>
-      <Metric label="Avg vs. model" value={bpSigned(avgRichCheap)} delta={`${fair} within threshold`} icon={CircleDollarSign}/>
+      <StatTile label="Calibrated lines" value={String(cal.length)} sub={`${new Set(cal.map(r=>r.sym)).size} symbol(s)`} icon={Gauge} accent="#22d3ee"
+        split={cal.length ? [
+          { label: "Rich", value: rich.length, color: "#f43f5e" },
+          { label: "Fair", value: fair, color: "#64748b" },
+          { label: "Cheap", value: cheap.length, color: "#22d3ee" },
+        ] : null}/>
+      <StatTile label="Rich (overpriced)" value={String(rich.length)} sub="above model fee" icon={TrendingUp} tone={rich.length ? "neg" : "mute"} accent="#f43f5e"/>
+      <StatTile label="Cheap (underpriced)" value={String(cheap.length)} sub="below model fee" icon={TrendingDown} tone={cheap.length ? "info" : "mute"} accent="#22d3ee"/>
+      <StatTile label="Avg vs. model" value={bpSigned(avgRichCheap)} sub={`${fair} within threshold`} icon={CircleDollarSign}
+        tone={avgRichCheap == null ? "mute" : avgRichCheap > 5 ? "neg" : avgRichCheap < -5 ? "info" : "mute"}/>
     </div>
 
     <section className="panel p-4">
@@ -2887,10 +3358,13 @@ function PositionRisk() {
     </div>}
 
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      <Metric label="Unrealized P&L (USD)" value={fmtUsd(totalPnl, { plus: true })} delta={`${winners} up · ${losers} down`} icon={totalPnl >= 0 ? TrendingUp : TrendingDown}/>
-      <Metric label="Gross short (USD)" value={fmtUsd(grossShort)} delta={`${usd.filter(r=>r.qty<0).length} position(s)`} icon={TrendingDown}/>
-      <Metric label="Gross long (USD)" value={fmtUsd(grossLong)} delta={`${usd.filter(r=>r.qty>0).length} position(s)`} icon={TrendingUp}/>
-      <Metric label="Net exposure (USD)" value={fmtUsd(netExposure, { plus: true })} delta="long − short, $" icon={CircleDollarSign}/>
+      <StatTile label="Unrealized P&L (USD)" value={fmtUsd(totalPnl, { plus: true })} sub={`${winners} up · ${losers} down`}
+        icon={totalPnl >= 0 ? TrendingUp : TrendingDown} tone={totalPnl > 0 ? "pos" : totalPnl < 0 ? "neg" : "mute"}
+        accent={totalPnl >= 0 ? "#34d399" : "#f43f5e"}/>
+      <StatTile label="Gross short (USD)" value={fmtUsd(grossShort)} sub={`${usd.filter(r=>r.qty<0).length} position(s)`} icon={TrendingDown} accent="#f43f5e"/>
+      <StatTile label="Gross long (USD)" value={fmtUsd(grossLong)} sub={`${usd.filter(r=>r.qty>0).length} position(s)`} icon={TrendingUp} accent="#34d399"/>
+      <StatTile label="Net exposure (USD)" value={fmtUsd(netExposure, { plus: true })} sub="long − short, $" icon={CircleDollarSign}
+        split={[{ label: "Long", value: grossLong, color: "#34d399", display: fmtUsd(grossLong) }, { label: "Short", value: grossShort, color: "#f43f5e", display: fmtUsd(grossShort) }]}/>
     </div>
     {nonUsd.length > 0 && <div className="rounded border border-slate-800 bg-slate-900/40 px-3 py-2 text-xs text-slate-500">
       {nonUsd.length} position(s) in HKD/JPY not included above (no real FX-rate feed to convert with) — shown in their own currency in the table below.
@@ -2954,6 +3428,18 @@ const CROWD_BUCKET_BADGE = {
 };
 const dtcStr = (v) => (v == null || !isFinite(v) ? "—" : v < 0.01 ? "<0.01d" : `${v.toFixed(v < 10 ? 2 : 0)}d`);
 
+function CrowdTreeCell(props) {
+  const { x, y, width, height, name, bucket, dtc } = props;
+  if (width < 1 || height < 1) return null;
+  const fill = CROWD_BUCKET_COLOR[bucket] || "#64748b";
+  const big = width > 46 && height > 24;
+  return <g>
+    <rect x={x} y={y} width={width} height={height} fill={fill} fillOpacity={0.82} stroke="#0b151e" strokeWidth={2}/>
+    {big && <text x={x + 5} y={y + 14} fill="#0b151e" style={{ fontSize: 10, fontWeight: 700 }}>{name}</text>}
+    {big && height > 38 && <text x={x + 5} y={y + 27} fill="#0b151e" style={{ fontSize: 9, opacity: 0.75 }}>{dtcStr(dtc)}</text>}
+  </g>;
+}
+
 function CrowdTooltip({ active, payload }) {
   if (!active || !payload || !payload.length) return null;
   const r = payload[0].payload;
@@ -3014,12 +3500,18 @@ function Crowding() {
     </div>}
 
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      <Metric label="Names shorted" value={String(rows.length)} delta={`${multiClient} held by 2+ clients`} icon={Boxes}/>
-      <Metric label="Elevated risk" value={String(elevated)} delta="HIGH + EXTREME days-to-cover" icon={ShieldCheck}/>
-      <Metric label="Total short value (USD)" value={fmtUsd(totalShortValue)} delta={nonUsdCount ? `+ ${nonUsdCount} in HKD/JPY (see table)` : "across the book"} icon={CircleDollarSign}/>
-      <Metric label="Most crowded" value={mostCrowded ? mostCrowded.sym : "—"} delta={mostCrowded ? `${dtcStr(mostCrowded.daysToCover)} to cover` : ""} icon={TrendingDown}/>
+      <StatTile label="Names shorted" value={String(rows.length)} sub={`${multiClient} held by 2+ clients`} icon={Boxes} accent="#22d3ee"/>
+      <StatTile label="Elevated risk" value={String(elevated)} tone={elevated ? "warn" : "pos"} icon={ShieldCheck}
+        sub="HIGH + EXTREME days-to-cover" accent={elevated ? "#f59e0b" : "#34d399"}
+        bar={rows.length ? { pct: (elevated / rows.length) * 100, color: "#f59e0b" } : null}/>
+      <StatTile label="Total short value (USD)" value={fmtUsd(totalShortValue)} icon={CircleDollarSign}
+        sub={nonUsdCount ? `+ ${nonUsdCount} in HKD/JPY (see table)` : "across the book"}/>
+      <StatTile label="Most crowded" value={mostCrowded ? mostCrowded.sym : "—"} icon={TrendingDown}
+        sub={mostCrowded ? `${dtcStr(mostCrowded.daysToCover)} to cover · ${mostCrowded.bucket}` : ""}
+        accent={mostCrowded ? CROWD_BUCKET_COLOR[mostCrowded.bucket] : undefined}/>
     </div>
 
+    <div className="grid gap-4 xl:grid-cols-[3fr_2fr]">
     <section className="panel p-4">
       <div className="mb-1 flex items-center justify-between">
         <div className="font-semibold">Crowding map <span className="text-xs text-slate-500">days to cover × clients exposed, bubble = short value</span></div>
@@ -3046,6 +3538,19 @@ function Crowding() {
       </div>
     </section>
 
+    <section className="panel p-4">
+      <div className="mb-3 font-semibold">Short value map <span className="text-xs text-slate-500">area = $ short · color = days-to-cover bucket</span></div>
+      <div className="h-72">
+        {rows.some(r => r.shortValue) ? <ResponsiveContainer width="100%" height="100%">
+          <Treemap data={rows.filter(r => r.shortValue > 0).map(r => ({ name: r.sym, size: r.shortValue, bucket: r.bucket, dtc: r.daysToCover, clients: r.numClients }))}
+            dataKey="size" stroke="#0b151e" content={<CrowdTreeCell/>} isAnimationActive={false}>
+            <Tooltip contentStyle={TT} formatter={(v, n, p) => [fmtUsd(v), `${p.payload.name} · ${dtcStr(p.payload.dtc)} · ${p.payload.bucket}`]}/>
+          </Treemap>
+        </ResponsiveContainer> : <div className="flex h-full items-center justify-center text-xs text-slate-600">no real short-value marks yet</div>}
+      </div>
+    </section>
+    </div>
+
     <section className="panel overflow-hidden">
       <div className="border-b border-slate-800 px-4 py-3 font-semibold">All shorted symbols <span className="text-xs text-slate-500">most crowded first</span></div>
       <div className="max-h-96 overflow-auto">
@@ -3064,6 +3569,194 @@ function Crowding() {
               <td className="px-3 py-1.5"><span className={`badge ${CROWD_BUCKET_BADGE[r.bucket] || "bg-slate-800 text-slate-400"}`}>{r.bucket}</span></td>
             </tr>)}
             {data && !rows.length && <tr><td colSpan={9} className="px-3 py-6 text-center text-slate-600">no short positions</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>;
+}
+
+// ---- Counterparty Exposure (.prime.exposure / .prime.lenders) --------
+const RATING_COLOR = { AAA: "#34d399", AA: "#22d3ee", A: "#38bdf8", BBB: "#f59e0b", BB: "#fb923c", B: "#f43f5e", UNRATED: "#64748b" };
+const RATING_ORDER = ["AAA", "AA", "A", "BBB", "BB", "B", "UNRATED"];
+const utilColor = (u) => (u == null ? "#64748b" : u > 1 ? "#f43f5e" : u > 0.85 ? "#f59e0b" : u > 0.6 ? "#22d3ee" : "#34d399");
+
+function CptyTooltip({ active, payload }) {
+  if (!active || !payload || !payload.length) return null;
+  const r = payload[0].payload;
+  return <div className="rounded border border-slate-700 bg-[#0b151e] px-3 py-2 text-xs shadow-lg">
+    <div className="mb-1 flex items-center gap-2 font-semibold text-slate-100">{r.lender}
+      <span className="badge" style={{ background: "#0b151e", border: `1px solid ${RATING_COLOR[r.creditRating] || "#334155"}`, color: RATING_COLOR[r.creditRating] || "#94a3b8" }}>{r.creditRating || "—"}</span>
+    </div>
+    <div className="space-y-0.5 text-slate-400">
+      <div>gross <span className="tabular-nums text-slate-200">{fmtMoney(r.grossExposure, r.ccy)}</span> / limit <span className="tabular-nums text-slate-200">{fmtMoney(r.creditLimit, r.ccy)}</span></div>
+      <div>margin req <span className="tabular-nums text-slate-200">{fmtMoney(r.marginRequirement, r.ccy)}</span> · headroom <span className="tabular-nums text-slate-200">{fmtMoney(r.headroom, r.ccy)}</span></div>
+      <div className="font-semibold" style={{ color: utilColor(r.utilizationPct) }}>{r.utilizationPct == null ? "no limit" : `${(r.utilizationPct * 100).toFixed(0)}% utilized`}{r.breach ? " · BREACH" : ""}</div>
+    </div>
+  </div>;
+}
+
+function CounterpartyExposure() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+
+  const load = useCallback(() => {
+    fetch(new URL("/api/prime", GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (!auto) return; const id = setInterval(load, 5000); return () => clearInterval(id); }, [auto, load]);
+
+  const expo = data?.exposure || [];
+  const lenders = data?.lenders || [];
+  const ratingByLender = Object.fromEntries(lenders.map(l => [l.lender, l.creditRating]));
+
+  // one card per lender: fold its (lender,ccy) rows, pick the worst utilization
+  const byLender = useMemo(() => {
+    const m = new Map();
+    for (const r of expo) {
+      const cur = m.get(r.lender) || { lender: r.lender, creditRating: r.creditRating || ratingByLender[r.lender] || "UNRATED", rows: [], worstUtil: null, anyBreach: false };
+      cur.rows.push(r);
+      if (r.utilizationPct != null) cur.worstUtil = Math.max(cur.worstUtil ?? 0, r.utilizationPct);
+      if (r.breach) cur.anyBreach = true;
+      m.set(r.lender, cur);
+    }
+    // include lenders with no active borrow (0 exposure, full headroom)
+    for (const l of lenders) if (!m.has(l.lender)) m.set(l.lender, { lender: l.lender, creditRating: l.creditRating || "UNRATED", rows: [], worstUtil: 0, anyBreach: false });
+    return [...m.values()].sort((a, b) => (b.worstUtil ?? -1) - (a.worstUtil ?? -1));
+  }, [expo, lenders]);
+
+  // exposure by currency (never blended — no real FX feed)
+  const byCcy = useMemo(() => {
+    const m = new Map();
+    for (const r of expo) {
+      const c = m.get(r.ccy) || { ccy: r.ccy, gross: 0, marginReq: 0, limit: 0 };
+      c.gross += r.grossExposure || 0; c.marginReq += r.marginRequirement || 0; c.limit += r.creditLimit || 0;
+      m.set(r.ccy, c);
+    }
+    return [...m.values()].sort((a, b) => b.gross - a.gross);
+  }, [expo]);
+
+  // stacked bar: gross exposure per lender, split by ccy
+  const ccys = [...new Set(expo.map(r => r.ccy))];
+  const CCY_FILL = { USD: "#22d3ee", HKD: "#f59e0b", JPY: "#a78bfa" };
+  const chartRows = byLender.map(l => {
+    const row = { lender: l.lender };
+    for (const c of ccys) row[c] = l.rows.filter(r => r.ccy === c).reduce((a, r) => a + (r.grossExposure || 0), 0);
+    row.limitUSD = l.rows.filter(r => r.ccy === "USD").reduce((a, r) => a + (r.creditLimit || 0), 0);
+    return row;
+  });
+
+  const ratingMix = useMemo(() => {
+    const m = new Map();
+    for (const l of byLender) m.set(l.creditRating, (m.get(l.creditRating) || 0) + 1);
+    return RATING_ORDER.filter(r => m.has(r)).map(r => ({ label: r, value: m.get(r), color: RATING_COLOR[r] || "#64748b", display: m.get(r) }));
+  }, [byLender]);
+
+  const breaches = byLender.filter(l => l.anyBreach).length;
+  const nearLimit = byLender.filter(l => l.worstUtil != null && l.worstUtil > 0.85 && !l.anyBreach).length;
+  const totMarginUSD = expo.filter(r => r.ccy === "USD").reduce((a, r) => a + (r.marginRequirement || 0), 0);
+  const usdCcy = byCcy.find(c => c.ccy === "USD");
+
+  return <div className="space-y-4">
+    <LiveBar auto={auto} setAuto={setAuto} onRefresh={load} updated={updated} connected={data?.connected}
+      note="counterparty exposure · gross borrow vs. real credit limit, per lender">
+      <span className="text-slate-400">securities finance · <span className="text-slate-500">primefinance CEP · .prime.expo.build</span></span>
+    </LiveBar>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/prime — {err}</div>}
+    {data && !expo.length && !lenders.length && <div className="panel p-8 text-center text-sm text-slate-500">
+      No counterparty data yet.<br/>
+      <span className="text-xs text-slate-600">Needs .prime.borrows populated and the CEP's market-data refresh (eq_hdb at -eqhdbaddr) to have run at least once — .prime.exposure is rebuilt there.</span>
+    </div>}
+
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <StatTile label="Counterparties" value={String(byLender.length)} sub={`${expo.length} (lender, ccy) line(s)`} icon={Landmark}
+        accent="#22d3ee"/>
+      <StatTile label="Limit breaches" value={String(breaches)} tone={breaches ? "neg" : "pos"} icon={ShieldCheck}
+        sub={`${nearLimit} within 15% of limit`} accent={breaches ? "#f43f5e" : nearLimit ? "#f59e0b" : "#34d399"}/>
+      <StatTile label="Gross exposure (USD)" value={fmtUsd(usdCcy?.gross)} icon={CircleDollarSign}
+        sub={usdCcy?.limit ? `${((usdCcy.gross / usdCcy.limit) * 100).toFixed(0)}% of $${(usdCcy.limit / 1e6).toFixed(0)}M limit` : "—"}
+        bar={usdCcy?.limit ? { pct: (usdCcy.gross / usdCcy.limit) * 100, color: utilColor(usdCcy.gross / usdCcy.limit) } : null}/>
+      <StatTile label="Margin requirement (USD)" value={fmtUsd(totMarginUSD)} icon={Lock}
+        sub={usdCcy?.gross ? `${((totMarginUSD / usdCcy.gross) * 100).toFixed(1)}% of gross` : "—"} accent="#a78bfa"/>
+    </div>
+
+    {byCcy.length > 1 && <div className="rounded border border-slate-800 bg-slate-900/40 px-3 py-2 text-xs text-slate-500">
+      exposure shown per currency ({byCcy.map(c => `${c.ccy} ${fmtMoney(c.gross, c.ccy)}`).join("  ·  ")}) — never blended (no real FX-rate feed in this repo)
+    </div>}
+
+    <div className="grid gap-4 xl:grid-cols-[1fr_1.3fr]">
+      <section className="panel p-4">
+        <div className="mb-3 font-semibold">Credit-limit utilization <span className="text-xs text-slate-500">worst (lender, ccy) line</span></div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          {byLender.map(l => <div key={l.lender} className={`rounded-lg border p-2 ${l.anyBreach ? "border-rose-800 bg-rose-950/30" : "border-slate-800 bg-slate-900/30"}`}>
+            <ArcGauge value={l.worstUtil} size={116} thresholds={[0.85, 1]}
+              label={l.lender} sub={l.creditRating}/>
+          </div>)}
+          {data && !byLender.length && <div className="col-span-full py-6 text-center text-xs text-slate-600">no counterparties</div>}
+        </div>
+      </section>
+
+      <div className="space-y-4">
+        <section className="panel p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="font-semibold">Gross exposure by counterparty <span className="text-xs text-slate-500">split by currency</span></div>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+              {ccys.map(c => <span key={c} className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ background: CCY_FILL[c] || "#64748b" }}/><span className="text-slate-400">{c}</span></span>)}
+            </div>
+          </div>
+          <div className="h-60"><ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartRows} layout="vertical" margin={{ top: 4, right: 16, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36" horizontal={false}/>
+              <XAxis type="number" stroke="#566673" fontSize={10} tickFormatter={(v) => fmtUsd(v)}/>
+              <YAxis type="category" dataKey="lender" stroke="#566673" fontSize={11} width={64}/>
+              <Tooltip contentStyle={TT} formatter={(v, n) => [fmtMoney(v, n), n]} cursor={{ fill: "#ffffff08" }}/>
+              {ccys.map(c => <Bar key={c} dataKey={c} stackId="g" fill={CCY_FILL[c] || "#64748b"} isAnimationActive={false} radius={c === ccys[ccys.length - 1] ? [0, 3, 3, 0] : 0}/>)}
+            </BarChart>
+          </ResponsiveContainer></div>
+        </section>
+
+        <section className="panel p-4">
+          <div className="mb-3 font-semibold">Counterparty rating mix <span className="text-xs text-slate-500">by number of lenders</span></div>
+          {ratingMix.length ? <Donut segments={ratingMix} size={124} centerLabel={byLender.length} centerSub="lenders"/>
+            : <div className="py-6 text-center text-xs text-slate-600">no rating data</div>}
+        </section>
+      </div>
+    </div>
+
+    <section className="panel overflow-hidden">
+      <div className="border-b border-slate-800 px-4 py-3 font-semibold">Exposure detail <span className="text-xs text-slate-500">per (counterparty, currency) · worst utilization first</span></div>
+      <div className="max-h-96 overflow-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Counterparty", "Rating", "Ccy", "Gross exposure", "Credit limit", "Utilization", "Margin req", "Headroom", "Status"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+          <tbody>
+            {byLender.flatMap(l => (l.rows.length ? l.rows : [{ lender: l.lender, creditRating: l.creditRating, ccy: null, grossExposure: 0, creditLimit: null, utilizationPct: null, marginRequirement: null, headroom: null, breach: false }])
+              .slice().sort((a, b) => (b.utilizationPct ?? -1) - (a.utilizationPct ?? -1))
+              .map((r, i) => <tr key={l.lender + i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+                <td className="px-3 py-1.5 font-semibold text-slate-200">{r.lender}</td>
+                <td className="px-3 py-1.5"><span className="badge" style={{ background: "#0b151e", border: `1px solid ${RATING_COLOR[r.creditRating] || "#334155"}55`, color: RATING_COLOR[r.creditRating] || "#94a3b8" }}>{r.creditRating || "—"}</span></td>
+                <td className="px-3 py-1.5 text-slate-500">{r.ccy || "—"}</td>
+                <td className="px-3 py-1.5 tabular-nums text-slate-300">{fmtMoney(r.grossExposure, r.ccy)}</td>
+                <td className="px-3 py-1.5 tabular-nums text-slate-500">{fmtMoney(r.creditLimit, r.ccy)}</td>
+                <td className="px-3 py-1.5">
+                  <div className="flex items-center gap-2">
+                    <MiniBar pct={r.utilizationPct == null ? 0 : Math.min(100, r.utilizationPct * 100)} color={utilColor(r.utilizationPct)} w={56}/>
+                    <span className="tabular-nums" style={{ color: utilColor(r.utilizationPct) }}>{r.utilizationPct == null ? "—" : `${(r.utilizationPct * 100).toFixed(0)}%`}</span>
+                  </div>
+                </td>
+                <td className="px-3 py-1.5 tabular-nums text-slate-400">{fmtMoney(r.marginRequirement, r.ccy)}</td>
+                <td className={`px-3 py-1.5 tabular-nums ${r.headroom != null && r.headroom < 0 ? "text-rose-400" : "text-slate-400"}`}>{fmtMoney(r.headroom, r.ccy)}</td>
+                <td className="px-3 py-1.5">{r.breach ? <span className="badge bg-rose-950 text-rose-300">BREACH</span>
+                  : r.utilizationPct != null && r.utilizationPct > 0.85 ? <span className="badge bg-amber-950 text-amber-300">NEAR LIMIT</span>
+                  : r.utilizationPct == null ? <span className="text-slate-600">no limit</span>
+                  : <span className="badge bg-emerald-950 text-emerald-300">OK</span>}</td>
+              </tr>))}
+            {data && !byLender.length && <tr><td colSpan={9} className="px-3 py-6 text-center text-slate-600">no counterparty exposure</td></tr>}
           </tbody>
         </table>
       </div>
@@ -3884,6 +4577,228 @@ const LOG_LEVEL_STYLE = {
   RAW:"bg-slate-900 text-slate-500"
 };
 
+// ---- JobStatus (mon `jobStatus` table — modules/mon/jobStatus.q) -----
+const JOB_STATUS_COLOR = { RUNNING: "#f59e0b", SUCCESS: "#34d399", FAILED: "#f43f5e", UNKNOWN: "#64748b" };
+const JOB_STATUS_BADGE = {
+  RUNNING: "bg-amber-950 text-amber-300", SUCCESS: "bg-emerald-950 text-emerald-300",
+  FAILED: "bg-rose-950 text-rose-300", UNKNOWN: "bg-slate-800 text-slate-400",
+};
+const JOB_DAYS = [1, 7, 14, 30];
+function fmtDur(ms) {
+  if (ms == null || !isFinite(ms)) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(s < 10 ? 2 : 1)}s`;
+  const m = Math.floor(s / 60), r = Math.round(s % 60);
+  if (m < 60) return `${m}m ${String(r).padStart(2, "0")}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${String(m % 60).padStart(2, "0")}m`;
+}
+const jobTs = (t) => (t == null ? "—" : new Date(t).toLocaleString([], { month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+const jobClock = (t) => (t == null ? "—" : new Date(t).toLocaleTimeString());
+
+function JobGantt({ runs, days }) {
+  const now = Date.now();
+  const t1 = now;
+  const spanFloor = now - days * 86400000;
+  const starts = runs.map((r) => r.startTime).filter(Boolean);
+  const t0 = starts.length ? Math.max(spanFloor, Math.min(...starts) - 60000) : spanFloor;
+  const span = Math.max(1, t1 - t0);
+  const lanes = [...new Set(runs.map((r) => r.jobName))].sort();
+  if (!lanes.length) return <div className="py-8 text-center text-xs text-slate-600">no runs in the selected window</div>;
+  const laneH = 24, padL = 128, W = 900, H = lanes.length * laneH + 24;
+  const x = (t) => padL + ((Math.min(t1, Math.max(t0, t)) - t0) / span) * (W - padL - 12);
+  const ticks = 6;
+  return <div className="overflow-x-auto">
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="min-w-[720px]">
+      {Array.from({ length: ticks + 1 }, (_, i) => {
+        const tx = padL + (i / ticks) * (W - padL - 12);
+        const tv = t0 + (i / ticks) * span;
+        return <g key={i}>
+          <line x1={tx} y1={16} x2={tx} y2={H} stroke="#1e2b36"/>
+          <text x={tx} y={11} textAnchor="middle" className="fill-slate-600" style={{ fontSize: 9 }}>
+            {new Date(tv).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+          </text>
+        </g>;
+      })}
+      {lanes.map((lane, li) => {
+        const y = 20 + li * laneH;
+        const laneRuns = runs.filter((r) => r.jobName === lane);
+        return <g key={lane}>
+          <text x={padL - 8} y={y + laneH / 2 + 3} textAnchor="end" className="fill-slate-300" style={{ fontSize: 11 }}>{lane}</text>
+          <line x1={padL} y1={y + laneH - 1} x2={W - 12} y2={y + laneH - 1} stroke="#141f29"/>
+          {laneRuns.map((r, i) => {
+            const bx = x(r.startTime);
+            const bw = Math.max(3, x(r.live ? t1 : r.endTime || r.startTime) - bx);
+            const c = JOB_STATUS_COLOR[r.status] || JOB_STATUS_COLOR.UNKNOWN;
+            return <rect key={i} x={bx} y={y + 4} width={bw} height={laneH - 10} rx={2}
+              fill={c} fillOpacity={r.live ? 0.55 : 0.85} stroke={c} strokeWidth={r.live ? 1 : 0}>
+              <title>{`${lane} @ ${jobTs(r.startTime)} · ${r.status} · ${fmtDur(r.durationMs)}${r.sym ? ` · ${r.sym}` : ""}`}</title>
+            </rect>;
+          })}
+        </g>;
+      })}
+    </svg>
+  </div>;
+}
+
+function JobStatus() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [days, setDays] = useState(7);
+  const [jobFilter, setJobFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [, setTick] = useState(0);
+
+  const load = useCallback(() => {
+    fetch(new URL(`/api/jobstatus?days=${days}`, GW), { cache: "no-store" })
+      .then((r) => r.json().then((j) => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then((j) => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch((e) => setErr(e.message));
+  }, [days]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (!auto) return; const id = setInterval(load, 5000); return () => clearInterval(id); }, [auto, load]);
+  // 1s tick so "running for …" elapsed counters advance between polls
+  useEffect(() => { const id = setInterval(() => setTick((n) => n + 1), 1000); return () => clearInterval(id); }, []);
+
+  const s = data?.summary || {};
+  const runs = data?.runs || [];
+  const running = data?.running || [];
+  const jobNames = useMemo(() => [...new Set(runs.map((r) => r.jobName))].sort(), [runs]);
+  const filtered = useMemo(() => runs.filter((r) =>
+    (!jobFilter || r.jobName === jobFilter) && (!statusFilter || r.status === statusFilter)
+  ), [runs, jobFilter, statusFilter]);
+
+  // duration-trend series (finished runs only, oldest→newest)
+  const trend = useMemo(() => [...filtered]
+    .filter((r) => !r.live && r.durationMs != null && r.startTime)
+    .sort((a, b) => a.startTime - b.startTime)
+    .map((r) => ({ t: r.startTime, secs: r.durationMs / 1000, status: r.status, jobName: r.jobName })), [filtered]);
+
+  const srcNote = data ? `${data.rdbConnected ? "realtime (mon RDB)" : "RDB offline"} · ${data.hdbConnected ? "history (mon HDB)" : "HDB offline"}` : "";
+
+  return <div className="space-y-4">
+    <LiveBar auto={auto} setAuto={setAuto} onRefresh={load} updated={updated} connected={data?.connected} note={srcNote}>
+      <span className="text-slate-400">job status · <span className="text-slate-500">mon `jobStatus` table · modules/mon/jobStatus.q</span></span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {JOB_DAYS.map((d) => <button key={d} onClick={() => setDays(d)}
+          className={`px-2 py-1 ${days === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+    </LiveBar>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/jobstatus — {err}
+      <div className="mt-1 text-rose-400/70">needs the <span className="font-mono">mon</span> module running (RDB :5021/:5101, HDB :5023) — start it from SystemAdmin → Control.</div></div>}
+
+    {data && !runs.length && <div className="panel p-8 text-center text-sm text-slate-500">
+      No <span className="font-mono">jobStatus</span> rows in the last {days} day(s).<br/>
+      <span className="text-xs text-slate-600">The table fills when a batch/one-shot job wraps itself in <span className="font-mono">.mon.job.run</span> (or calls <span className="font-mono">.mon.job.start</span>/<span className="font-mono">.mon.job.end</span>) from <span className="font-mono">modules/mon/jobStatus.q</span> — e.g. EOD or housekeeping. The mon module must be running so the row reaches the pipeline.</span>
+    </div>}
+
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <StatTile label="Running now" value={String(s.running ?? 0)} icon={RotateCw}
+        tone={(s.running ?? 0) > 0 ? "warn" : "mute"} accent={(s.running ?? 0) > 0 ? "#f59e0b" : "#334155"}
+        sub={running.length ? running.map((r) => r.jobName).slice(0, 3).join(", ") : "idle"}/>
+      <StatTile label="Success rate" value={s.successRate == null ? "—" : `${Math.round(s.successRate * 100)}%`} icon={ShieldCheck}
+        tone={s.successRate == null ? "mute" : s.successRate >= 0.99 ? "pos" : s.successRate >= 0.9 ? "info" : "neg"}
+        sub={`${s.success ?? 0} ok · ${s.failed ?? 0} failed`}
+        bar={s.successRate == null ? null : { pct: s.successRate * 100, color: s.successRate >= 0.9 ? "#34d399" : "#f43f5e" }}/>
+      <StatTile label="Last 24h" value={String(s.last24h?.runs ?? 0)} icon={History} accent="#22d3ee"
+        sub={`${s.last24h?.success ?? 0} ok · ${s.last24h?.failed ?? 0} failed · ${s.last24h?.running ?? 0} live`}/>
+      <StatTile label="Duration" value={fmtDur(s.avgDurationMs)} icon={Gauge}
+        sub={`p95 ${fmtDur(s.p95DurationMs)} · max ${fmtDur(s.maxDurationMs)}`}/>
+    </div>
+
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <StatTile label="Jobs tracked" value={String(s.jobs ?? 0)} icon={ListChecks} sub={`${s.procs ?? 0} process(es)`}/>
+      <StatTile label="Total runs" value={humanCount(s.runs ?? 0)} icon={Layers} sub={`last ${days}d`}/>
+      <StatTile label="Failed (window)" value={String(s.failed ?? 0)} icon={Bell}
+        tone={(s.failed ?? 0) > 0 ? "neg" : "pos"} accent={(s.failed ?? 0) > 0 ? "#f43f5e" : "#34d399"}/>
+      <StatTile label="Rows" value={humanCount(data?.count ?? 0)} icon={Database} sub="start + end events"/>
+    </div>
+
+    {running.length > 0 && <section className="panel p-4">
+      <div className="mb-2 flex items-center gap-2 font-semibold"><RotateCw size={14} className="animate-spin text-amber-400"/> Currently running</div>
+      <div className="space-y-1.5">
+        {running.map((r, i) => <div key={i} className="flex items-center justify-between rounded bg-amber-950/20 px-3 py-2 text-xs">
+          <span className="flex items-center gap-2">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-amber-400"/>
+            <span className="font-semibold text-slate-200">{r.jobName}</span>
+            <span className="text-slate-500">{r.sym}</span>
+          </span>
+          <span className="tabular-nums text-amber-300">running {fmtDur(r.elapsedMs ?? (r.startTime ? Date.now() - r.startTime : null))} · since {jobClock(r.startTime)}</span>
+        </div>)}
+      </div>
+    </section>}
+
+    <section className="panel p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="font-semibold">Run timeline <span className="text-xs text-slate-500">by job · last {days}d · width = duration</span></div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+          {Object.entries(JOB_STATUS_COLOR).filter(([k]) => k !== "UNKNOWN").map(([k, c]) => <span key={k} className="flex items-center gap-1.5">
+            <span className="h-2 w-2 rounded-sm" style={{ background: c }}/><span className="text-slate-400">{k}</span>
+          </span>)}
+        </div>
+      </div>
+      <div className="max-h-80 overflow-y-auto">
+        <JobGantt runs={runs} days={days}/>
+      </div>
+    </section>
+
+    <section className="panel p-4">
+      <div className="mb-3 font-semibold">Duration trend <span className="text-xs text-slate-500">completed runs · seconds{jobFilter ? ` · ${jobFilter}` : ""}</span></div>
+      <div className="h-56">
+        {trend.length ? <ResponsiveContainer width="100%" height="100%">
+          <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
+            <CartesianGrid stroke="#1e2b36"/>
+            <XAxis type="number" dataKey="t" domain={["dataMin", "dataMax"]} stroke="#566673" fontSize={10}
+              tickFormatter={(v) => new Date(v).toLocaleDateString([], { month: "numeric", day: "numeric" })}/>
+            <YAxis type="number" dataKey="secs" stroke="#566673" fontSize={10} tickFormatter={(v) => `${v}s`}/>
+            <Tooltip contentStyle={TT} cursor={{ strokeDasharray: "3 3" }}
+              formatter={(v, n) => (n === "secs" ? [`${Number(v).toFixed(2)}s`, "duration"] : [v, n])}
+              labelFormatter={(v) => jobTs(v)}/>
+            <Scatter data={trend} fillOpacity={0.85}>
+              {trend.map((r, i) => <Cell key={i} fill={JOB_STATUS_COLOR[r.status] || "#64748b"}/>)}
+            </Scatter>
+          </ScatterChart>
+        </ResponsiveContainer> : <div className="flex h-full items-center justify-center text-xs text-slate-600">no completed runs to chart</div>}
+      </div>
+    </section>
+
+    <section className="panel overflow-hidden">
+      <div className="flex flex-wrap items-center gap-3 border-b border-slate-800 px-4 py-3">
+        <span className="font-semibold">Runs</span>
+        <span className="text-xs text-slate-500">{filtered.length} of {runs.length}</span>
+        <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value)} className="rounded border border-slate-800 bg-slate-900 px-2 py-1 text-xs text-slate-200 outline-none">
+          <option value="">all jobs</option>
+          {jobNames.map((j) => <option key={j} value={j}>{j}</option>)}
+        </select>
+        <span className="flex overflow-hidden rounded border border-slate-800 text-xs">
+          {["", "SUCCESS", "FAILED", "RUNNING"].map((k) => <button key={k || "all"} onClick={() => setStatusFilter(k)}
+            className={`px-2 py-1 ${statusFilter === k ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{k || "all"}</button>)}
+        </span>
+      </div>
+      <div className="max-h-[46vh] overflow-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Job", "Process", "Started", "Ended", "Duration", "Status"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+          <tbody className="tabular-nums">
+            {filtered.map((r, i) => <tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+              <td className="px-3 py-1.5 font-semibold text-slate-200">{r.jobName}</td>
+              <td className="px-3 py-1.5 font-mono text-slate-400">{r.sym || "—"}</td>
+              <td className="whitespace-nowrap px-3 py-1.5 text-slate-400">{jobTs(r.startTime)}</td>
+              <td className="whitespace-nowrap px-3 py-1.5 text-slate-500">{r.live ? "—" : jobTs(r.endTime)}</td>
+              <td className="px-3 py-1.5 text-slate-300">{r.live ? <span className="text-amber-300">running {fmtDur(r.startTime ? Date.now() - r.startTime : null)}</span> : fmtDur(r.durationMs)}</td>
+              <td className="px-3 py-1.5"><span className={`badge ${JOB_STATUS_BADGE[r.status] || JOB_STATUS_BADGE.UNKNOWN}`}>{r.status}</span></td>
+            </tr>)}
+            {data && !filtered.length && <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-600">{runs.length ? "no runs match the filter" : "no runs"}</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>;
+}
+
 const LOGS_REFRESH_MS = 3000;
 
 function Logs() {
@@ -4005,6 +4920,7 @@ function App() {
     if(active==="Tables") return <Tables/>;
     if(active==="Query Mon") return <QueryMon/>;
     if(active==="Tests") return <Tests/>;
+    if(active==="Timers") return <Timers/>;
     if(active==="Control") return <Control/>;
     if(active==="HDB Health") return <HDBHealth/>;
     if(active==="Launcher") return <Launcher/>;
@@ -4020,10 +4936,12 @@ function App() {
     if(active==="Fee Calibration") return <BorrowFeeCalibration/>;
     if(active==="Position Risk") return <PositionRisk/>;
     if(active==="Crowding") return <Crowding/>;
+    if(active==="Counterparty") return <CounterpartyExposure/>;
     if(active==="Desk Risk") return <DeskRisk/>;
     if(active==="Process Mon") return <ProcMon/>;
     if(active==="Resources") return <Processes/>;
     if(active==="Logs") return <Logs/>;
+    if(active==="JobStatus") return <JobStatus/>;
     return <Overview orders={orders}/>;
   },[active,orders]);
   return <div className="flex min-h-screen"><Nav active={active} setActive={setActive}/><main className="min-w-0 flex-1"><Header active={active}/><div className="p-4 md:p-6">{page}</div></main></div>

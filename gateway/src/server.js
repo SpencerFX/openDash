@@ -26,7 +26,9 @@ const { ReplayManager } = require("./replay");
 const { EqOhlcReader } = require("./eqOhlc");
 const { QueryMonReader } = require("./queryMon");
 const { PidstatsReader } = require("./pidstats");
+const { JobStatusReader } = require("./jobStatus");
 const { ProcMonReader } = require("./procMon");
+const { TimersReader } = require("./timers");
 
 function send(res, status, body) {
   const text = JSON.stringify(body, null, 2);
@@ -166,6 +168,7 @@ function createServer() {
   const eqOhlc = config.eq && config.eq.enabled ? new EqOhlcReader(config.eq) : null;
   const queryMon = config.queryMon && config.queryMon.enabled ? new QueryMonReader(config.queryMon) : null;
   const pidstats = config.pidstats && config.pidstats.enabled ? new PidstatsReader(config.pidstats) : null;
+  const jobStatus = config.jobStatus && config.jobStatus.enabled ? new JobStatusReader(config.jobStatus) : null;
   const tables =
     config.tableSources && config.tableSources.length
       ? new TablesReader(config.tableSources, config.cepTimeoutMs)
@@ -174,6 +177,7 @@ function createServer() {
   // idb sources - their in-memory tables are transient).
   const exploreSources = (config.tableSources || []).filter((s) => (s.kind || "rdb") !== "idb");
   const procMon = new ProcMonReader(modules, pidstats);
+  const timers = config.timers && config.timers.enabled ? new TimersReader(modules, config.timers) : null;
   const explore = exploreSources.length
     ? new ExploreReader(exploreSources, Math.max(config.queryTimeoutMs || 0, 15000))
     : null;
@@ -213,6 +217,8 @@ function createServer() {
           eq: eqOhlc ? eqOhlc.status() : { enabled: false },
           queryMon: queryMon ? queryMon.status() : { enabled: false },
           pidstats: pidstats ? pidstats.status() : { enabled: false },
+          jobStatus: jobStatus ? jobStatus.status() : { enabled: false },
+          timers: timers ? timers.status() : { enabled: false },
         });
       }
 
@@ -315,6 +321,18 @@ function createServer() {
         if (req.method !== "GET") return send(res, 405, { error: "use GET" });
         if (!pidstats) { const e = new Error("pidstats disabled (set OPENQ_PIDSTATS_RDB to the mon_rdb host:port)"); e.statusCode = 503; throw e; }
         return send(res, 200, await pidstats.read());
+      }
+
+      if (url.pathname === "/api/jobstatus") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!jobStatus) { const e = new Error("jobStatus disabled (set OPENQ_JOBSTATUS_RDB to the mon_rdb host:port)"); e.statusCode = 503; throw e; }
+        return send(res, 200, await jobStatus.read(url.searchParams.get("days")));
+      }
+
+      if (url.pathname === "/api/timers") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!timers) { const e = new Error("timers disabled (OPENQ_TIMERS=off)"); e.statusCode = 503; throw e; }
+        return send(res, 200, await timers.read());
       }
 
       if (url.pathname === "/api/eq/syms") {
@@ -561,6 +579,8 @@ function createServer() {
     if (eqOhlc) eqOhlc.start();
     if (queryMon) queryMon.start();
     if (pidstats) pidstats.start();
+    if (jobStatus) jobStatus.start();
+    if (timers) timers.start();
     if (tables) tables.start();
     if (explore) explore.start();
     procMon.start();
@@ -583,12 +603,14 @@ function createServer() {
     if (eqOhlc) await eqOhlc.stop();
     if (queryMon) await queryMon.stop();
     if (pidstats) await pidstats.stop();
+    if (jobStatus) await jobStatus.stop();
+    if (timers) await timers.stop();
     if (tables) await tables.stop();
     if (explore) await explore.stop();
     await procMon.stop();
   }
 
-  return { httpServer, wss, gws, stream, markout, spread, prime, report, hdbHealth, ohlc, eqOhlc, tables, explore, procMon, control, replay, queryMon, pidstats, start, stop };
+  return { httpServer, wss, gws, stream, markout, spread, prime, report, hdbHealth, ohlc, eqOhlc, tables, explore, procMon, control, replay, queryMon, pidstats, jobStatus, timers, start, stop };
 }
 
 module.exports = { createServer };

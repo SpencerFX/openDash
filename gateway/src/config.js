@@ -338,7 +338,12 @@ const config = {
   //             archive (one row per (tab,date), written by
   //             05_table_health_scan.q against C:/data/db1/efx), read off
   //             mon_hdb (C:/data/db1/mon).
-  //   eq       - a LIVE scan of eq_hdb (C:/data/db1/eq).
+  //   eq ("eq HDB") - the on-disk `tableHealthEq` scan archive for
+  //             C:/data/db1/eq (same 05_table_health_scan.q, one bar-level
+  //             table), also read off mon_hdb. Bounded (boundDays) because
+  //             that splay only exists in the ~35 partitions it was scanned
+  //             into. Gives rows-per-month, archive completeness and
+  //             rows-per-day - the live eq_hdb scan couldn't.
   //   mon      - a LIVE scan of mon_hdb's own partitioned tables.
   // Override the whole list with OPENQ_HDBHEALTH_SOURCES =
   //   "name=host:port[:archive|live],...". Back-compat: OPENQ_HDBHEALTH is
@@ -362,14 +367,26 @@ const config = {
     } else {
       const mon = str("OPENQ_HDBHEALTH", "127.0.0.1:5023");
       const eq = str("OPENQ_EQ_HDB", "127.0.0.1:5090");
+      const monOn = mon && !/^(off|none|0|false)$/i.test(mon);
+      const eqOn = eq && !/^(off|none|0|false)$/i.test(eq);
       // ordered to match the HDB Health page's alpha button order:
-      // efx HDB (archive) · eq HDB · mon HDB
-      if (mon && !/^(off|none|0|false)$/i.test(mon))
-        sources.push({ name: "archive", ...ep(mon), kind: "archive" });
-      if (eq && !/^(off|none|0|false)$/i.test(eq))
-        sources.push({ name: "eq", ...ep(eq), kind: "live" });
-      if (mon && !/^(off|none|0|false)$/i.test(mon))
-        sources.push({ name: "mon", ...ep(mon), kind: "live" });
+      // efx HDB (archive) · eq HDB (archive) · mon HDB (live)
+      if (monOn) sources.push({ name: "archive", ...ep(mon), kind: "archive" });
+      // eq HDB: the `tableHealthEq` archive that 05_table_health_scan.q writes
+      // into the /mon root (served by mon_hdb, NOT eq_hdb) - one archive
+      // source with rows-per-month, archive completeness and rows-per-day.
+      // Only the ~35 partitions it was scanned into carry that splay, so the
+      // reader MUST stay bounded (boundDays) - an unbounded scan of the 6k+
+      // /mon root would OS-error on a 2009 partition with no tableHealthEq.
+      if (monOn && eqOn)
+        sources.push({
+          name: "eq",
+          ...ep(mon),
+          kind: "archive",
+          tabs: [{ name: "tableHealthEq", kind: "bar" }],
+          boundDays: int("OPENQ_HDBHEALTH_EQ_BOUND_DAYS", 400),
+        });
+      if (monOn) sources.push({ name: "mon", ...ep(mon), kind: "live" });
     }
     if (!sources.length) return { enabled: false };
     return { enabled: true, sources, defaultSource: sources[0].name, timeoutMs };
@@ -411,6 +428,61 @@ const config = {
       endpoints,
       table: str("OPENQ_PIDSTATS_TABLE", "pidstats"),
       timeoutMs: Math.max(2000, int("OPENQ_PIDSTATS_TIMEOUT_MS", 8000)),
+    };
+  })(),
+
+  // System > Job Status: the mon module's `jobStatus` table
+  // (modules/mon/jobStatus.q -> schema_mon.q). Realtime off the mon RDB
+  // pair (OPENQ_JOBSTATUS_RDB, same active/standby pair as pidstats),
+  // history off the mon HDB (OPENQ_JOBSTATUS_HDB, default mon_hdb :5023).
+  // OPENQ_JOBSTATUS_RDB=off/none/0 disables the page.
+  jobStatus: (function () {
+    const raw = str("OPENQ_JOBSTATUS_RDB", "127.0.0.1:5021,127.0.0.1:5101");
+    if (!raw || /^(off|none|0|false)$/i.test(raw)) return { enabled: false };
+    const endpoints = raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((hp) => {
+        const [h, p] = hp.split(":");
+        return { host: h || "127.0.0.1", port: Number(p) || 5021 };
+      });
+    const hraw = str("OPENQ_JOBSTATUS_HDB", "127.0.0.1:5023");
+    let hdb = null;
+    if (hraw && !/^(off|none|0|false)$/i.test(hraw)) {
+      const [h, p] = hraw.split(":");
+      hdb = { host: h || "127.0.0.1", port: Number(p) || 5023 };
+    }
+    // mon_idb: staged-but-not-yet-promoted jobStatus segments, so a job that
+    // ran earlier today (already harvested off the RDB, not yet in the HDB)
+    // still shows. off/none/0 to skip.
+    const iraw = str("OPENQ_JOBSTATUS_IDB", "127.0.0.1:5022");
+    let idb = null;
+    if (iraw && !/^(off|none|0|false)$/i.test(iraw)) {
+      const [h, p] = iraw.split(":");
+      idb = { host: h || "127.0.0.1", port: Number(p) || 5022 };
+    }
+    return {
+      enabled: endpoints.length > 0,
+      endpoints,
+      hdb,
+      idb,
+      histDays: Math.max(1, Math.min(120, int("OPENQ_JOBSTATUS_HIST_DAYS", 14))),
+      timeoutMs: Math.max(2000, int("OPENQ_JOBSTATUS_TIMEOUT_MS", 8000)),
+    };
+  })(),
+
+  // System > Timers: every openQ process's `.util.timer.tab` (the
+  // multi-timer scheduler in core/utils/timer.q). Reuses the Modules
+  // cfg_proc topology + one light IPC probe per node - no persistent
+  // connections, no own endpoint list. OPENQ_TIMERS=off to hide the page.
+  timers: (function () {
+    const raw = str("OPENQ_TIMERS", "on");
+    if (/^(off|none|0|false)$/i.test(raw)) return { enabled: false };
+    return {
+      enabled: true,
+      host: str("OPENQ_TIMERS_HOST", "127.0.0.1"),
+      timeoutMs: Math.max(1000, int("OPENQ_TIMERS_TIMEOUT_MS", 2500)),
     };
   })(),
 
