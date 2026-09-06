@@ -2,13 +2,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createRoot } from "react-dom/client";
 import {
   Activity, Archive, ArrowDown, ArrowUp, BarChart3, Bell, BookText, Boxes, CandlestickChart, Check,
-  ChevronRight, CircleDollarSign, Cpu, Database, FastForward, Gauge, HardDrive, History, KeyRound, Landmark, LayoutDashboard,
+  ChevronRight, CircleDollarSign, Cpu, Database, FastForward, Flame, FlaskConical, Gauge, HardDrive, History, KeyRound, Landmark, LayoutDashboard,
   Layers, Library, ListChecks, ListFilter, Lock, MemoryStick, Network, Pause, Play, Power, RefreshCw, Rocket,
   Radar, RotateCw, ScrollText, Search, Settings, ShieldCheck, Square, Timer, Trash2, TrendingDown, TrendingUp,
   Unlock, Wifi, X, Zap
 } from "lucide-react";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, ZAxis, Tooltip, Legend, ReferenceLine, ResponsiveContainer, CartesianGrid, AreaChart, Area, ScatterChart, Scatter, Cell, Treemap, RadialBarChart, RadialBar, PolarAngleAxis, PolarGrid } from "recharts";
-import { createChart, CandlestickSeries, LineSeries, HistogramSeries, ColorType, CrosshairMode } from "lightweight-charts";
+import { createChart, createSeriesMarkers, CandlestickSeries, LineSeries, HistogramSeries, ColorType, CrosshairMode } from "lightweight-charts";
 import "./index.css";
 
 // Base URL of the openq-dashboard-gateway (see ../gateway). Falls back to the
@@ -33,9 +33,9 @@ const chart = Array.from({length: 24}, (_,i) => ({
 const NAV = [
   { kind: "item", name: "Overview", icon: LayoutDashboard },
   { kind: "group", name: "eFX", icon: Activity, children: [
-      ["Charts", CandlestickChart], ["Market Impact", BarChart3], ["Markout", TrendingUp], ["Spreads", TrendingDown] ] },
+      ["Charts", CandlestickChart], ["Market Impact", BarChart3], ["Markout", TrendingUp], ["Spreads", TrendingDown], ["Backtest", FlaskConical] ] },
   { kind: "group", name: "EQ", icon: CircleDollarSign, children: [
-      ["EQ Charts", CandlestickChart], ["Desk Risk", ShieldCheck], ["Prime Finance", CircleDollarSign],
+      ["EQ Charts", CandlestickChart], ["Candles", Flame], ["Desk Risk", ShieldCheck], ["Prime Finance", CircleDollarSign],
       ["Fee Calibration", Gauge], ["Position Risk", Archive], ["Crowding", Boxes], ["Counterparty", Landmark] ] },
   { kind: "group", name: "Data", icon: Library, children: [
       ["Catalog", BookText], ["Explorer", Search] ] },
@@ -1605,7 +1605,7 @@ function HDBHealth() {
   useEffect(() => { const id = setInterval(load, 20000); return () => clearInterval(id); }, [load]);
   const pickSource = (s) => { setSource(s); try { localStorage.setItem("openq.hdbhealth.source", s); } catch {} };
 
-  const SRC_LABEL = { archive: "efx HDB", eq: "eq HDB", mon: "mon HDB" };
+  const SRC_LABEL = { archive: "efx HDB", eq: "eq HDB", futures: "futures HDB", mon: "mon HDB", rates: "rates HDB", ta: "ta HDB" };
   const srcLabel = (n) => SRC_LABEL[n] || n;
   const sources = [...(data?.sources || [{ name: "archive", kind: "archive" }])]
     .sort((a, b) => srcLabel(a.name).localeCompare(srcLabel(b.name)));
@@ -1747,7 +1747,7 @@ function HDBHealth() {
       {!isLive && <>
       <section className="panel p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="font-semibold">{metric === "rows" ? "Rows written" : "Bytes on disk"} per month <span className="text-xs font-normal text-slate-500">{source === "eq" ? "recent archive window" : "whole archive"}</span></div>
+          <div className="font-semibold">{metric === "rows" ? "Rows written" : "Bytes on disk"} per month <span className="text-xs font-normal text-slate-500">{source === "archive" || source === "mon" ? "whole archive" : "recent archive window"}</span></div>
           <div className="flex gap-1 text-xs">
             {[["rows", "rows"], ["bytes", "bytes"]].map(([k, lbl]) => <button key={k} onClick={() => setMetric(k)}
               className={`rounded px-2 py-1 ${metric === k ? "bg-slate-700 text-slate-100" : "border border-slate-800 text-slate-400 hover:bg-slate-900"}`}>{lbl}</button>)}
@@ -2149,16 +2149,27 @@ const iLine = (times, arr) => {
 // calls setData. `bars` (from /api/ohlc) is bucket-aligned / ascending /
 // de-duped, so time = t/1000 (UNIX sec) satisfies the lib's contract.
 // Oscillators (RSI/MACD/ATR) go in native v5 sub-panes below price.
-function LwCandles({ bars, precision = 5, indicators, fitKey }) {
+function LwCandles({ bars, precision = 5, indicators, fitKey, markers, highlightTimes }) {
   const boxRef = useRef(null);
   const chartRef = useRef(null);
   const mainRef = useRef(null);
+  const markersRef = useRef(null);           // ISeriesMarkersPluginApi on the main series
   const extraRef = useRef({});               // name -> ISeriesApi
   const lastFitRef = useRef(null);           // fitKey we last fit-to-content for
   const [ohlc, setOhlc] = useState(null);    // O/H/L/C under the crosshair, or last bar
 
   const ind = indicators || {};
   const indKey = JSON.stringify(ind);
+  // pattern-hit overlays (EQ > Candles): amber arrows + recoloured bars
+  const markerData = useMemo(
+    () => (markers || [])
+      .map((m) => ({ time: Math.floor(m.time / 1000), position: m.position, color: m.color, shape: m.shape, text: m.text }))
+      .sort((a, b) => a.time - b.time),
+    [markers]
+  );
+  const markKey = markerData.map((m) => `${m.time}${m.shape}`).join(",");
+  const hlSet = highlightTimes instanceof Set ? highlightTimes : null;
+  const hlKey = hlSet ? [...hlSet].sort().join(",") : "";
   const oscN = ["rsi", "macd", "atr"].filter((k) => ind[k] && ind[k].on).length;
 
   useEffect(() => {
@@ -2187,6 +2198,7 @@ function LwCandles({ bars, precision = 5, indicators, fitKey }) {
       borderVisible: false,
       priceFormat: { type: "price", precision, minMove: 1 / 10 ** precision },
     });
+    markersRef.current = createSeriesMarkers(main, []);
     const E = {};
     if (ind.sma && ind.sma.on) E.sma = chart.addSeries(LineSeries, line("#22d3ee"), 0);
     if (ind.ema && ind.ema.on) E.ema = chart.addSeries(LineSeries, line("#f59e0b"), 0);
@@ -2225,7 +2237,7 @@ function LwCandles({ bars, precision = 5, indicators, fitKey }) {
     mainRef.current = main;
     extraRef.current = E;
     lastFitRef.current = null;   // force a fresh fit-to-content after re-create
-    return () => { chart.remove(); chartRef.current = null; mainRef.current = null; extraRef.current = {}; };
+    return () => { chart.remove(); chartRef.current = null; mainRef.current = null; markersRef.current = null; extraRef.current = {}; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [precision, indKey]);
 
@@ -2237,7 +2249,13 @@ function LwCandles({ bars, precision = 5, indicators, fitKey }) {
       .filter((b) => Number.isFinite(b.o) && Number.isFinite(b.c));
     const times = rows.map((r) => r.t);
     const closes = rows.map((r) => r.c), highs = rows.map((r) => r.h), lows = rows.map((r) => r.l);
-    main.setData(rows.map((r) => ({ time: r.t, open: r.o, high: r.h, low: r.l, close: r.c })));
+    main.setData(rows.map((r) => {
+      const bar = { time: r.t, open: r.o, high: r.h, low: r.l, close: r.c };
+      // EQ > Candles: paint a bar amber where the selected pattern fired
+      if (hlSet && hlSet.has(r.t)) { bar.color = "#fbbf24"; bar.wickColor = "#fbbf24"; bar.borderColor = "#fbbf24"; }
+      return bar;
+    }));
+    if (markersRef.current) markersRef.current.setMarkers(markerData);
 
     const E = extraRef.current;
     if (E.sma) E.sma.setData(iLine(times, iSMA(closes, ind.sma.len || 20)));
@@ -2277,7 +2295,7 @@ function LwCandles({ bars, precision = 5, indicators, fitKey }) {
     const last = rows[rows.length - 1];
     setOhlc(last ? { o: last.o, h: last.h, l: last.l, c: last.c } : null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bars, indKey, fitKey]);
+  }, [bars, indKey, fitKey, markKey, hlKey]);
 
   const px = (v) => (v == null ? "—" : v.toFixed(precision));
   const up = ohlc && ohlc.c >= ohlc.o;
@@ -2563,6 +2581,277 @@ function EqCharts() {
       <LwCandles bars={bars} precision={prec} indicators={ind} fitKey={`${sym}|${tf}|${days}`}/>
       {data && !nRaw && <div className="pt-4 text-center text-sm text-slate-500">no minute data for {sym} in the last {days} sessions</div>}
     </section>
+  </div>;
+}
+
+// EQ > Candles — the same eq_m1_yfinance OHLC chart as EQ > Charts, plus
+// the pre-computed candlestick-pattern hits from `candlePattern`
+// (modules/analytics/candle/run.q, served by candlePattern_hdb via
+// /api/eq/patterns + /api/eq/signals). Pick a pattern + a direction
+// (long / short / both) and every bar where that pattern fired is
+// repainted amber with an arrow marker.
+const CANDLE_DIRS = [["long", "Long", "#34d399"], ["short", "Short", "#f43f5e"], ["both", "Both", "#fbbf24"]];
+const cdlAbbrev = (p) => {
+  const s = String(p || "");
+  const caps = s[0] ? s[0].toUpperCase() + s.slice(1).replace(/[^A-Z]/g, "") : "";
+  return (caps.length >= 2 ? caps : s.slice(0, 4));
+};
+function CandlesEq() {
+  const [uni, setUni] = useState(null);
+  const [exch, setExch] = useState("");
+  const [q, setQ] = useState("");
+  const [sym, setSym] = useState(() => { try { return localStorage.getItem("openq.candles.sym") || localStorage.getItem("openq.eqcharts.sym") || ""; } catch { return ""; } });
+  const [days, setDays] = useState(5);
+  const [tf, setTf] = useState(() => { try { return Number(localStorage.getItem("openq.candles.tf")) || 15; } catch { return 15; } });
+  const [pattern, setPattern] = useState(() => { try { return localStorage.getItem("openq.candles.pattern") || "engulfing"; } catch { return "engulfing"; } });
+  const [dir, setDir] = useState(() => { try { return localStorage.getItem("openq.candles.dir") || "both"; } catch { return "both"; } });
+  const [meta, setMeta] = useState(null);
+  const [bars0, setBars0] = useState(null);
+  const [sig, setSig] = useState(null);
+  const [err, setErr] = useState(null);
+  const [uniErr, setUniErr] = useState(null);
+  const [metaErr, setMetaErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+
+  useEffect(() => { try { localStorage.setItem("openq.candles.tf", String(tf)); } catch { /* ignore */ } }, [tf]);
+  useEffect(() => { try { localStorage.setItem("openq.candles.pattern", pattern); } catch { /* ignore */ } }, [pattern]);
+  useEffect(() => { try { localStorage.setItem("openq.candles.dir", dir); } catch { /* ignore */ } }, [dir]);
+  useEffect(() => { try { sym && localStorage.setItem("openq.candles.sym", sym); } catch { /* ignore */ } }, [sym]);
+
+  const loadUni = useCallback(() => {
+    fetch(new URL("/api/eq/syms", GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setUni(j); setUniErr(null); setSym(s => s || (j.syms[0] && j.syms[0].sym) || ""); })
+      .catch(e => setUniErr(e.message));
+  }, []);
+  const loadMeta = useCallback(() => {
+    fetch(new URL("/api/eq/patterns", GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setMeta(j); setMetaErr(null); })
+      .catch(e => setMetaErr(e.message));
+  }, []);
+  useEffect(() => { loadUni(); loadMeta(); }, [loadUni, loadMeta]);
+
+  const loadBars = useCallback(() => {
+    if (!sym) return;
+    const u = new URL("/api/eq/bars", GW);
+    u.searchParams.set("sym", sym);
+    u.searchParams.set("days", String(days));
+    fetch(u, { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setBars0(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, [sym, days]);
+  const loadSig = useCallback(() => {
+    if (!sym) return;
+    const u = new URL("/api/eq/signals", GW);
+    u.searchParams.set("sym", sym);
+    u.searchParams.set("tf", EQ_TF.find(([, v]) => v === tf)?.[0] || "15m");
+    u.searchParams.set("pattern", pattern);
+    u.searchParams.set("dir", dir);
+    u.searchParams.set("days", String(days));
+    fetch(u, { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => setSig(j))
+      .catch(() => setSig(null));
+  }, [sym, tf, pattern, dir, days]);
+  useEffect(() => { loadBars(); }, [loadBars]);
+  useEffect(() => { loadSig(); }, [loadSig]);
+  useEffect(() => {
+    if (!auto) return;
+    const id = setInterval(() => { loadBars(); loadSig(); }, 30000);
+    const uid = setInterval(loadUni, 60000);
+    return () => { clearInterval(id); clearInterval(uid); };
+  }, [auto, loadBars, loadSig, loadUni]);
+
+  const shown = useMemo(() => {
+    if (!uni) return [];
+    const needle = q.trim().toLowerCase();
+    return uni.syms.filter(s => (!exch || s.exchange === exch) && (!needle || s.sym.toLowerCase().includes(needle))).slice(0, 80);
+  }, [uni, exch, q]);
+
+  const prec = eqPricePrec(bars0?.last);
+  const bars = useMemo(() => resampleBars(bars0?.bars || [], tf), [bars0, tf]);
+  const tfLabel = EQ_TF.find(([, v]) => v === tf)?.[0] || "15m";
+
+  const patMeta = useMemo(() => (meta?.patterns || []).find(p => p.pattern === pattern) || null, [meta, pattern]);
+  const patIsNeutral = patMeta?.direction === "neutral";
+  const effDir = patIsNeutral ? "both" : dir;
+
+  // one marker per bar-bucket a hit landed in; bar repaint set alongside
+  const { markers, highlightTimes, nLong, nShort } = useMemo(() => {
+    const tfMs = tf * 60000;
+    const hl = new Set();
+    const byBucket = new Map();
+    let nl = 0, ns = 0;
+    for (const s of (sig?.signals || [])) {
+      const bktSec = Math.floor(Math.floor(s.t / tfMs) * tfMs / 1000);
+      hl.add(bktSec);
+      const e = byBucket.get(bktSec) || { long: 0, short: 0, pats: new Set() };
+      if (s.signal > 0) { e.long++; nl++; } else if (s.signal < 0) { e.short++; ns++; }
+      e.pats.add(s.pattern);
+      byBucket.set(bktSec, e);
+    }
+    const mk = [...byBucket.entries()].map(([bktSec, e]) => {
+      const net = e.long - e.short;
+      const d = net > 0 ? "long" : net < 0 ? "short" : "flat";
+      const pats = [...e.pats];
+      return {
+        time: bktSec * 1000,
+        position: d === "short" ? "aboveBar" : "belowBar",
+        color: d === "long" ? "#34d399" : d === "short" ? "#f43f5e" : "#fbbf24",
+        shape: d === "long" ? "arrowUp" : d === "short" ? "arrowDown" : "circle",
+        text: pats.length === 1 ? cdlAbbrev(pats[0]) : `${pats.length}×`,
+      };
+    });
+    return { markers: mk, highlightTimes: hl, nLong: nl, nShort: ns };
+  }, [sig, tf]);
+
+  // one row per fired signal: symbol, time, and the price the pattern
+  // actually fired at - the resampled bar's close for whichever tf-bucket
+  // the signal's timestamp lands in, same bucketing the markers above use
+  const sigRows = useMemo(() => {
+    const tfMs = tf * 60000;
+    const byBucket = new Map(bars.map(b => [b.t, b]));
+    // direction here is the pattern's own category (bullish/bearish/both/
+    // neutral, from .candle.meta) - only a `both` pattern needs the
+    // signal's sign to tell a bullish instance from a bearish one; a
+    // bullish/bearish pattern is always that direction, and neutral
+    // (indecision, e.g. doji) is never long or short regardless of sign
+    const rows = (sig?.signals || []).map(s => {
+      const bkt = Math.floor(s.t / tfMs) * tfMs;
+      const bar = byBucket.get(bkt);
+      const direction =
+        s.direction === "bullish" ? "long" :
+        s.direction === "bearish" ? "short" :
+        s.direction === "both" ? (s.signal > 0 ? "long" : s.signal < 0 ? "short" : "flat") :
+        "neutral";
+      return { t: s.t, pattern: s.pattern, direction, price: bar ? bar.close : null };
+    });
+    rows.sort((a, b) => b.t - a.t);
+    return rows;
+  }, [sig, bars, tf]);
+
+  const nHits = sig?.count || 0;
+  const byPat = sig?.byPattern || [];
+  const patsCovered = new Set((sig?.signals || []).map(s => s.pattern)).size;
+
+  const orderedPatterns = useMemo(() => {
+    const arr = [...(meta?.patterns || [])];
+    arr.sort((a, b) => a.pattern.localeCompare(b.pattern));
+    return arr;
+  }, [meta]);
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400"><Flame size={13} className="mr-1 inline text-amber-400"/>Candle patterns · <span className="text-slate-500">candlePattern via candlePattern_hdb</span></span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[["All", ""], ...(uni?.exchanges || []).map(e => [e.exchange, e.exchange])].map(([lab, v]) =>
+          <button key={v || "all"} onClick={() => setExch(v)}
+            className={`px-2 py-1 ${exch === v ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{lab}</button>)}
+      </span>
+      <span className="relative">
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder={sym || "search symbol…"}
+          className="w-36 rounded border border-slate-800 bg-slate-900 px-2 py-1 font-mono text-slate-200 outline-none focus:border-cyan-500"/>
+        {q.trim() && shown.length > 0 && (
+          <div className="absolute z-20 mt-1 max-h-64 w-48 overflow-auto rounded border border-slate-700 bg-[#0b151e] py-1 shadow-lg">
+            {shown.map(s => <button key={s.sym} onClick={() => { setSym(s.sym); setQ(""); }}
+              className="flex w-full items-center justify-between px-2 py-1 text-left font-mono hover:bg-slate-800">
+              <span className="text-slate-200">{s.sym}</span><span className="text-[10px] text-slate-500">{s.exchange}</span>
+            </button>)}
+          </div>
+        )}
+      </span>
+      <span className="flex overflow-hidden rounded border border-slate-800" title="candle timeframe (candlePattern scans all 10)">
+        {EQ_TF.map(([lab, v]) => <button key={v} onClick={() => setTf(v)}
+          className={`px-1.5 py-1 ${tf === v ? "bg-cyan-500 text-slate-950 font-semibold" : "text-slate-400 hover:bg-slate-900"}`}>{lab}</button>)}
+      </span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[3, 5, 10].map(d => <button key={d} onClick={() => setDays(d)}
+          className={`px-2 py-1 ${days === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {meta?.scannedThrough && <span>scanned through {meta.scannedThrough}</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+
+      <div className="flex w-full flex-wrap items-center gap-2 border-t border-slate-800 pt-2">
+        <span className="text-slate-500">pattern</span>
+        <select value={pattern} onChange={e => setPattern(e.target.value)}
+          className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-slate-200 outline-none focus:border-cyan-500">
+          <option value="all">All patterns</option>
+          {orderedPatterns.map(p => <option key={p.pattern} value={p.pattern}>{p.pattern} · {p.direction}</option>)}
+        </select>
+        <span className="ml-2 text-slate-500">direction</span>
+        <span className="flex overflow-hidden rounded border border-slate-800">
+          {CANDLE_DIRS.map(([v, lab]) => <button key={v} disabled={patIsNeutral && v !== "both"}
+            onClick={() => setDir(v)}
+            className={`px-2.5 py-1 ${effDir === v ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"} ${patIsNeutral && v !== "both" ? "opacity-30" : ""}`}>{lab}</button>)}
+        </span>
+        {patIsNeutral && <span className="text-[11px] text-slate-500">— {pattern} is direction-less (indecision)</span>}
+        {patMeta && !patIsNeutral && <span className="text-[11px] text-slate-500">— {pattern}: {patMeta.direction}{patMeta.direction === "both" ? " (signal sign splits long/short)" : ""}</span>}
+      </div>
+    </section>
+
+    {uniErr && <div className="rounded border border-amber-900 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">{GW}/api/eq — {uniErr}
+      <div className="mt-1 text-amber-400/70">start the <span className="font-mono">eq</span> module from SystemAdmin → Control.</div></div>}
+    {metaErr && <div className="rounded border border-amber-900 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">{GW}/api/eq/patterns — {metaErr}
+      <div className="mt-1 text-amber-400/70">start the <span className="font-mono">candlePattern</span> module: <span className="font-mono">scripts/startStop/startupAllByModule.sh candlePattern</span></div></div>}
+    {err && !uniErr && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/eq/bars — {err}</div>}
+
+    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      <Metric label="Pattern hits" value={humanCount(nHits)} delta={`${pattern === "all" ? "all patterns" : pattern} · ${tfLabel} · ${days}d`} icon={Flame}/>
+      <Metric label="Long / Short" value={`${nLong} / ${nShort}`} delta={effDir === "both" ? "both shown" : `${effDir} only`} icon={nLong >= nShort ? TrendingUp : TrendingDown}/>
+      <Metric label="Bars marked" value={humanCount(highlightTimes.size)} delta={`of ${humanCount(bars.length)} ${tfLabel} bars`} icon={CandlestickChart}/>
+      <Metric label={pattern === "all" ? "Patterns fired" : "Last hit"} value={pattern === "all" ? String(patsCovered) : (sig?.signals?.length ? new Date(sig.signals[sig.signals.length - 1].t).toLocaleDateString() : "—")} delta={pattern === "all" ? "distinct" : "most recent"} icon={History}/>
+    </div>
+
+    <section className="panel p-4">
+      <div className="mb-3 flex items-baseline justify-between">
+        <div className="font-semibold">{sym || "—"} <span className="text-xs text-slate-500">{bars0?.exchange ? `${bars0.exchange} · ` : ""}{EQ_TF_LONG[tf] || `${tf}m`} · <span className="text-amber-400">{pattern === "all" ? "all patterns" : pattern}</span> {!patIsNeutral && `· ${effDir}`}</span></div>
+        {bars0?.lo != null && <div className="text-xs text-slate-500">{humanCount(bars0?.bars?.length || 0)} 1m bars</div>}
+      </div>
+      <LwCandles bars={bars} precision={prec} fitKey={`${sym}|${tf}|${days}`} markers={markers} highlightTimes={highlightTimes}/>
+      {sig && !nHits && <div className="pt-4 text-center text-sm text-slate-500">no <span className="text-amber-400">{pattern === "all" ? "pattern" : pattern}</span> {!patIsNeutral && effDir !== "both" ? `(${effDir}) ` : ""}hits for {sym} on {tfLabel} in the last {days} scanned days</div>}
+    </section>
+
+    {byPat.length > 0 && <section className="panel overflow-hidden">
+      <div className="border-b border-slate-800 px-4 py-2.5 text-xs font-semibold text-slate-300">Hits by pattern <span className="font-normal text-slate-500">{sym} · {tfLabel} · {days}d</span></div>
+      <div className="flex flex-wrap gap-2 p-3">
+        {byPat.map(p => <button key={p.pattern} onClick={() => setPattern(p.pattern)}
+          className={`rounded border px-2 py-1 text-xs ${pattern === p.pattern ? "border-amber-500 bg-amber-500/10 text-amber-300" : "border-slate-800 text-slate-400 hover:bg-slate-900"}`}>
+          <span className="font-mono">{p.pattern}</span> <span className="text-slate-500">{p.count}</span>
+        </button>)}
+      </div>
+    </section>}
+
+    {sigRows.length > 0 && <section className="panel overflow-x-auto">
+      <div className="border-b border-slate-800 px-4 py-2.5 text-xs font-semibold text-slate-300">
+        Signals <span className="font-normal text-slate-500">{sym} · {tfLabel} · {days}d · newest first{sigRows.length > 300 ? ` · showing 300 of ${sigRows.length}` : ""}</span>
+      </div>
+      <table className="w-full text-left text-sm">
+        <thead className="bg-[#0a121a] text-xs text-slate-500">
+          <tr>
+            <th className="px-4 py-2 font-medium">Symbol</th>
+            <th className="px-4 py-2 font-medium">Time</th>
+            <th className="px-4 py-2 font-medium">Pattern</th>
+            <th className="px-4 py-2 font-medium">Direction</th>
+            <th className="px-4 py-2 font-medium">Price</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sigRows.slice(0, 300).map((r, i) => <tr key={r.t + "|" + r.pattern + "|" + i} className="border-t border-slate-800 align-middle">
+            <td className="px-4 py-2 font-mono font-semibold text-slate-200">{sym}</td>
+            <td className="px-4 py-2 tabular-nums text-slate-300">{new Date(r.t).toLocaleString()}</td>
+            <td className="px-4 py-2 font-mono text-amber-300">{r.pattern}</td>
+            <td className={`px-4 py-2 ${r.direction === "long" ? "text-emerald-400" : r.direction === "short" ? "text-rose-400" : "text-slate-500"}`}>{r.direction}</td>
+            <td className="px-4 py-2 tabular-nums text-slate-200">{r.price != null ? r.price.toFixed(prec) : "—"}</td>
+          </tr>)}
+        </tbody>
+      </table>
+    </section>}
   </div>;
 }
 
@@ -4165,6 +4454,187 @@ function DecayChart({ data, dataKey, color, label }) {
   );
 }
 
+// ---- eFX > Backtest (modules/backtest/service.q, C:/data/db1/efx) ----
+const BACKTEST_DEFAULT = {
+  sym: "aud_cad", sDate: "2020-01-01", eDate: "2020-01-31",
+  strategy: "sma", fastN: 5, slowN: 20, lookback: 20, zEntry: 1.5, pattern: "hammer",
+  portfolio: "direction", risk: "none", maxAbsPos: 0.5, ddLimit: 0.05,
+  execution: "immediate", phaseIn: 5, costBp: 1, lag: 1, barsPerYear: 132480,
+};
+const btInput = "mt-1 w-full rounded border border-slate-800 bg-slate-950 px-2 py-1.5 text-sm text-slate-200";
+const btPct = (x) => (x == null || !isFinite(x)) ? "—" : (x * 100).toFixed(2) + "%";
+
+function Backtest() {
+  const [meta, setMeta] = useState(null);
+  const [f, setF] = useState(() => {
+    try { return { ...BACKTEST_DEFAULT, ...JSON.parse(localStorage.getItem("openq.backtest") || "{}") }; }
+    catch { return { ...BACKTEST_DEFAULT }; }
+  });
+  const [res, setRes] = useState(null);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const set = (k, v) => setF(p => { const n = { ...p, [k]: v }; try { localStorage.setItem("openq.backtest", JSON.stringify(n)); } catch {} return n; });
+
+  useEffect(() => {
+    // .bt.svc.meta[] is precomputed once at the q process's own startup
+    // (a full-archive by-sym scan, ~45s - see service.q's header) but a
+    // cold gateway restart still needs a generous first-fetch timeout.
+    fetch(new URL("/api/backtest/meta", GW))
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(setMeta)
+      .catch(e => setErr(e.message));
+  }, []);
+
+  const run = useCallback(() => {
+    setBusy(true); setErr(null);
+    const u = new URL("/api/backtest/run", GW);
+    u.searchParams.set("sym", f.sym.trim());
+    u.searchParams.set("sDate", f.sDate);
+    u.searchParams.set("eDate", f.eDate);
+    u.searchParams.set("strategy", f.strategy);
+    if (f.strategy === "sma") { u.searchParams.set("fastN", f.fastN); u.searchParams.set("slowN", f.slowN); }
+    if (f.strategy === "meanrev") { u.searchParams.set("lookback", f.lookback); u.searchParams.set("zEntry", f.zEntry); }
+    if (f.strategy === "momentum") u.searchParams.set("lookback", f.lookback);
+    if (f.strategy === "candle") u.searchParams.set("pattern", f.pattern.trim());
+    u.searchParams.set("portfolio", f.portfolio);
+    u.searchParams.set("risk", f.risk);
+    if (f.risk === "maxpos") u.searchParams.set("maxAbsPos", f.maxAbsPos);
+    if (f.risk === "maxdd") u.searchParams.set("ddLimit", f.ddLimit);
+    u.searchParams.set("execution", f.execution);
+    if (f.execution === "twap") u.searchParams.set("phaseIn", f.phaseIn);
+    u.searchParams.set("costBp", f.costBp);
+    u.searchParams.set("lag", f.lag);
+    u.searchParams.set("barsPerYear", f.barsPerYear);
+    fetch(u)
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => setRes(j))
+      .catch(e => { setErr(e.message); setRes(null); })
+      .finally(() => setBusy(false));
+  }, [f]);
+
+  const symOptions = meta?.symbols || [];
+  const st = res?.stats || {};
+
+  return <div className="space-y-4">
+    <section className="panel p-3">
+      <div className="mb-3 flex items-center gap-2 text-xs">
+        <FlaskConical size={14} className="text-slate-500"/>
+        <span className="text-slate-400">modules/backtest - alpha → portfolio → risk → execution pipeline (LEAN Algorithm Framework-style) over 1-minute FX bars, C:/data/db1/efx</span>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <label className="text-[11px] text-slate-400">symbol
+          <input list="bt-syms" value={f.sym} onChange={e => set("sym", e.target.value)} placeholder="aud_cad" className={btInput + " font-mono"}/>
+          <datalist id="bt-syms">{symOptions.map(s => <option key={s.sym} value={s.sym}/>)}</datalist>
+        </label>
+        <label className="text-[11px] text-slate-400">from
+          <input type="date" value={f.sDate} onChange={e => set("sDate", e.target.value)} className={btInput}/>
+        </label>
+        <label className="text-[11px] text-slate-400">to
+          <input type="date" value={f.eDate} onChange={e => set("eDate", e.target.value)} className={btInput}/>
+        </label>
+        <label className="text-[11px] text-slate-400">strategy
+          <select value={f.strategy} onChange={e => set("strategy", e.target.value)} className={btInput}>
+            <option value="sma">sma crossover</option>
+            <option value="meanrev">mean reversion</option>
+            <option value="momentum">momentum</option>
+            <option value="candle">candle pattern</option>
+          </select>
+        </label>
+        <label className="text-[11px] text-slate-400">portfolio
+          <select value={f.portfolio} onChange={e => set("portfolio", e.target.value)} className={btInput}>
+            <option value="direction">direction (±1)</option>
+            <option value="confweighted">confidence-weighted</option>
+          </select>
+        </label>
+        <label className="text-[11px] text-slate-400">execution
+          <select value={f.execution} onChange={e => set("execution", e.target.value)} className={btInput}>
+            <option value="immediate">immediate</option>
+            <option value="twap">twap phase-in</option>
+          </select>
+        </label>
+
+        {f.strategy === "sma" && <>
+          <label className="text-[11px] text-slate-400">fast N <input type="number" value={f.fastN} onChange={e => set("fastN", e.target.value)} className={btInput}/></label>
+          <label className="text-[11px] text-slate-400">slow N <input type="number" value={f.slowN} onChange={e => set("slowN", e.target.value)} className={btInput}/></label>
+        </>}
+        {f.strategy === "meanrev" && <>
+          <label className="text-[11px] text-slate-400">lookback <input type="number" value={f.lookback} onChange={e => set("lookback", e.target.value)} className={btInput}/></label>
+          <label className="text-[11px] text-slate-400">z entry <input type="number" step="0.1" value={f.zEntry} onChange={e => set("zEntry", e.target.value)} className={btInput}/></label>
+        </>}
+        {f.strategy === "momentum" &&
+          <label className="text-[11px] text-slate-400">lookback <input type="number" value={f.lookback} onChange={e => set("lookback", e.target.value)} className={btInput}/></label>}
+        {f.strategy === "candle" &&
+          <label className="text-[11px] text-slate-400">pattern <input value={f.pattern} onChange={e => set("pattern", e.target.value)} placeholder="hammer" className={btInput + " font-mono"}/></label>}
+
+        <label className="text-[11px] text-slate-400">risk
+          <select value={f.risk} onChange={e => set("risk", e.target.value)} className={btInput}>
+            <option value="none">none</option>
+            <option value="maxpos">max position</option>
+            <option value="maxdd">max drawdown</option>
+          </select>
+        </label>
+        {f.risk === "maxpos" &&
+          <label className="text-[11px] text-slate-400">max |pos| <input type="number" step="0.1" value={f.maxAbsPos} onChange={e => set("maxAbsPos", e.target.value)} className={btInput}/></label>}
+        {f.risk === "maxdd" &&
+          <label className="text-[11px] text-slate-400">dd limit <input type="number" step="0.01" value={f.ddLimit} onChange={e => set("ddLimit", e.target.value)} className={btInput}/></label>}
+        {f.execution === "twap" &&
+          <label className="text-[11px] text-slate-400">phase-in bars <input type="number" value={f.phaseIn} onChange={e => set("phaseIn", e.target.value)} className={btInput}/></label>}
+        <label className="text-[11px] text-slate-400">cost (bps) <input type="number" step="0.1" value={f.costBp} onChange={e => set("costBp", e.target.value)} className={btInput}/></label>
+        <label className="text-[11px] text-slate-400">lag (bars) <input type="number" value={f.lag} onChange={e => set("lag", e.target.value)} className={btInput}/></label>
+      </div>
+      <div className="mt-3 flex items-center gap-2">
+        <button onClick={run} disabled={busy}
+          className="flex items-center gap-1.5 rounded bg-cyan-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-cyan-600 disabled:opacity-50">
+          <Play size={13}/> {busy ? "running…" : "run backtest"}
+        </button>
+        {meta && <span className="text-[10px] text-slate-600">{symOptions.length.toLocaleString()} symbols available in the archive</span>}
+      </div>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{err}</div>}
+
+    {res && <>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <Metric label="total return" value={btPct(st.totalReturn)} icon={st.totalReturn >= 0 ? TrendingUp : TrendingDown}/>
+        <Metric label="sharpe" value={st.sharpe != null ? st.sharpe.toFixed(2) : "—"} icon={Activity}/>
+        <Metric label="max drawdown" value={btPct(st.maxDrawdown)} icon={TrendingDown}/>
+        <Metric label="hit rate" value={btPct(st.hitRate)} icon={Check}/>
+        <Metric label="trades" value={st.numTrades != null ? st.numTrades.toLocaleString() : "—"} icon={Zap}/>
+        <Metric label="avg turnover" value={st.avgTurnover != null ? st.avgTurnover.toFixed(3) : "—"} icon={RefreshCw}/>
+      </div>
+
+      <section className="panel p-4">
+        <div className="mb-3 font-semibold">Equity curve
+          <span className="ml-2 text-xs font-normal text-slate-500">{res.sym} · {res.strategy} / {res.portfolio} / {res.risk} / {res.execution} · {res.bars.toLocaleString()} bars</span>
+        </div>
+        <ResponsiveContainer width="100%" height={280}>
+          <LineChart data={res.curve} margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
+            <CartesianGrid stroke="#1e293b" strokeDasharray="3 3"/>
+            <XAxis dataKey="t" tickFormatter={ts => new Date(ts).toLocaleDateString()} tick={{ fontSize: 10, fill: "#64748b" }} minTickGap={60}/>
+            <YAxis tick={{ fontSize: 10, fill: "#64748b" }} width={54} domain={["auto", "auto"]}/>
+            <Tooltip contentStyle={TT} labelFormatter={ts => new Date(ts).toLocaleString()} formatter={(v, k) => [typeof v === "number" ? v.toFixed(4) : v, k]}/>
+            <Line type="monotone" dataKey="equity" stroke="#22d3ee" dot={false} strokeWidth={1.5} isAnimationActive={false}/>
+          </LineChart>
+        </ResponsiveContainer>
+      </section>
+
+      <section className="panel p-4">
+        <div className="mb-3 font-semibold">Position <span className="text-xs font-normal text-slate-500">-1 short · 0 flat · +1 long</span></div>
+        <ResponsiveContainer width="100%" height={140}>
+          <LineChart data={res.curve} margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
+            <CartesianGrid stroke="#1e293b" strokeDasharray="3 3"/>
+            <XAxis dataKey="t" tickFormatter={ts => new Date(ts).toLocaleDateString()} tick={{ fontSize: 10, fill: "#64748b" }} minTickGap={60}/>
+            <YAxis domain={[-1.2, 1.2]} ticks={[-1, 0, 1]} tick={{ fontSize: 10, fill: "#64748b" }} width={30}/>
+            <Tooltip contentStyle={TT} labelFormatter={ts => new Date(ts).toLocaleString()}/>
+            <ReferenceLine y={0} stroke="#334155"/>
+            <Line type="stepAfter" dataKey="pos" stroke="#f59e0b" dot={false} strokeWidth={1.25} isAnimationActive={false}/>
+          </LineChart>
+        </ResponsiveContainer>
+      </section>
+    </>}
+  </div>;
+}
+
 function Markout() {
   const [data,setData] = useState(null);
   const [err,setErr] = useState(null);
@@ -4677,7 +5147,10 @@ function JobStatus() {
     .sort((a, b) => a.startTime - b.startTime)
     .map((r) => ({ t: r.startTime, secs: r.durationMs / 1000, status: r.status, jobName: r.jobName })), [filtered]);
 
-  const srcNote = data ? `${data.rdbConnected ? "realtime (mon RDB)" : "RDB offline"} · ${data.hdbConnected ? "history (mon HDB)" : "HDB offline"}` : "";
+  const srcNote = data
+    ? `${data.rdbConnected ? "realtime (mon RDB)" : "RDB offline"} · ${data.idbConnected ? "staged (mon IDB)" : "IDB —"} · ${data.hdbConnected ? "history (mon HDB)" : "HDB offline"}` +
+      (s.staleRunningHidden ? ` · ${s.staleRunningHidden} stale RUNNING hidden (>${s.staleRunningH || 6}h)` : "")
+    : "";
 
   return <div className="space-y-4">
     <LiveBar auto={auto} setAuto={setAuto} onRefresh={load} updated={updated} connected={data?.connected} note={srcNote}>
@@ -4929,8 +5402,10 @@ function App() {
     if(active==="Modules") return <Modules/>;
     if(active==="Charts") return <Charts/>;
     if(active==="EQ Charts") return <EqCharts/>;
+    if(active==="Candles") return <CandlesEq/>;
     if(active==="Market Impact") return <Impact/>;
     if(active==="Markout") return <Markout/>;
+    if(active==="Backtest") return <Backtest/>;
     if(active==="Spreads") return <Spreads/>;
     if(active==="Prime Finance") return <PrimeFinance/>;
     if(active==="Fee Calibration") return <BorrowFeeCalibration/>;

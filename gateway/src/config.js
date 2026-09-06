@@ -157,8 +157,10 @@ const config = {
     modules: (function () {
       const v = list("OPENQ_CONTROL_MODULES");
       // eq = the read-only equities HDB (cfg_proc/modules/eq/, one hdb proc,
-      // no feeder/eod); startable via startupAllByModule.sh eq.
-      return v.length ? v : ["mon", "markout", "spread", "primefinance", "report", "eq"];
+      // no feeder/eod); startable via startupAllByModule.sh eq. candlePattern
+      // = the same shape for the candlePattern table (C:/data/db1/ta), read
+      // by the EQ > Candles page.
+      return v.length ? v : ["mon", "markout", "spread", "primefinance", "report", "eq", "candlePattern"];
     })(),
     monGw: {
       name: str("OPENQ_MONGW_NAME", "mon_gw"),
@@ -332,8 +334,10 @@ const config = {
   report: cepTarget("OPENQ_REPORT_CEP", 5080),
 
   // /api/hdbhealth?source=<name>. Selectable sources, each a button on the
-  // System > HDB Health page (labelled "efx HDB" / "eq HDB" / "mon HDB",
-  // shown in that alpha order):
+  // System > HDB Health page (labelled "efx HDB" / "eq HDB" / "futures HDB" /
+  // "mon HDB" / "rates HDB" / "ta HDB", shown in that alpha order) - one per
+  // top-level folder actually present under C:/data/db1/ as of 2026-09-05
+  // (efx, eq, futures, mon, rates, ta):
   //   archive ("efx HDB") - the on-disk `tableHealth`/`tableHealthTick` scan
   //             archive (one row per (tab,date), written by
   //             05_table_health_scan.q against C:/data/db1/efx), read off
@@ -341,10 +345,20 @@ const config = {
   //   eq ("eq HDB") - the on-disk `tableHealthEq` scan archive for
   //             C:/data/db1/eq (same 05_table_health_scan.q, one bar-level
   //             table), also read off mon_hdb. Bounded (boundDays) because
-  //             that splay only exists in the ~35 partitions it was scanned
+  //             that splay only exists in the ~400 partitions it was scanned
   //             into. Gives rows-per-month, archive completeness and
   //             rows-per-day - the live eq_hdb scan couldn't.
+  //   futures ("futures HDB") - same idea as eq, for C:/data/db1/futures'
+  //             futures_m1_yfinance/futures_d1_yfinance (`tableHealthFutures`).
   //   mon      - a LIVE scan of mon_hdb's own partitioned tables.
+  //   rates ("rates HDB") - same idea as eq, for C:/data/db1/rates'
+  //             rateIndices_m1_yfinance/rateIndices_d1_yfinance
+  //             (`tableHealthRates`).
+  //   ta ("ta HDB") - same idea as eq, for C:/data/db1/ta's single
+  //             `candlePattern` table (`tableHealthTa`) - the
+  //             modules/analytics/candle daily scan's own archive, not a raw
+  //             market-data one, but it's a real folder under db1 with the
+  //             same completeness question worth asking of it.
   // Override the whole list with OPENQ_HDBHEALTH_SOURCES =
   //   "name=host:port[:archive|live],...". Back-compat: OPENQ_HDBHEALTH is
   // the archive+mon target; OPENQ_EQ_HDB the eq target. off/none/0 disables.
@@ -370,14 +384,15 @@ const config = {
       const monOn = mon && !/^(off|none|0|false)$/i.test(mon);
       const eqOn = eq && !/^(off|none|0|false)$/i.test(eq);
       // ordered to match the HDB Health page's alpha button order:
-      // efx HDB (archive) · eq HDB (archive) · mon HDB (live)
+      // efx HDB (archive) · eq HDB · futures HDB · mon HDB (live) · rates HDB · ta HDB
       if (monOn) sources.push({ name: "archive", ...ep(mon), kind: "archive" });
-      // eq HDB: the `tableHealthEq` archive that 05_table_health_scan.q writes
-      // into the /mon root (served by mon_hdb, NOT eq_hdb) - one archive
-      // source with rows-per-month, archive completeness and rows-per-day.
-      // Only the ~35 partitions it was scanned into carry that splay, so the
-      // reader MUST stay bounded (boundDays) - an unbounded scan of the 6k+
-      // /mon root would OS-error on a 2009 partition with no tableHealthEq.
+      // eq/futures/rates/ta HDB: the `tableHealth<Name>` archive that
+      // 05_table_health_scan.q writes into the /mon root (served by mon_hdb,
+      // not the module's own live hdb) - one archive source each with
+      // rows-per-month, archive completeness and rows-per-day. Only the
+      // bounded window each was actually scanned into carries that splay, so
+      // the reader MUST stay bounded (boundDays) - an unbounded scan of the
+      // 6k+ /mon root would OS-error on a 2009 partition with no such splay.
       if (monOn && eqOn)
         sources.push({
           name: "eq",
@@ -386,7 +401,31 @@ const config = {
           tabs: [{ name: "tableHealthEq", kind: "bar" }],
           boundDays: int("OPENQ_HDBHEALTH_EQ_BOUND_DAYS", 400),
         });
+      if (monOn)
+        sources.push({
+          name: "futures",
+          ...ep(mon),
+          kind: "archive",
+          tabs: [{ name: "tableHealthFutures", kind: "bar" }],
+          boundDays: int("OPENQ_HDBHEALTH_FUTURES_BOUND_DAYS", 400),
+        });
       if (monOn) sources.push({ name: "mon", ...ep(mon), kind: "live" });
+      if (monOn)
+        sources.push({
+          name: "rates",
+          ...ep(mon),
+          kind: "archive",
+          tabs: [{ name: "tableHealthRates", kind: "bar" }],
+          boundDays: int("OPENQ_HDBHEALTH_RATES_BOUND_DAYS", 400),
+        });
+      if (monOn)
+        sources.push({
+          name: "ta",
+          ...ep(mon),
+          kind: "archive",
+          tabs: [{ name: "tableHealthTa", kind: "bar" }],
+          boundDays: int("OPENQ_HDBHEALTH_TA_BOUND_DAYS", 60),
+        });
     }
     if (!sources.length) return { enabled: false };
     return { enabled: true, sources, defaultSource: sources[0].name, timeoutMs };
@@ -468,6 +507,10 @@ const config = {
       hdb,
       idb,
       histDays: Math.max(1, Math.min(120, int("OPENQ_JOBSTATUS_HIST_DAYS", 14))),
+      // a RUNNING row still "running" this many hours after it started is
+      // treated as orphaned (crashed job / a bare .mon.job.start test call
+      // with no .mon.job.end) and hidden from every list. 0 = never hide.
+      staleRunningH: Math.max(0, int("OPENQ_JOBSTATUS_STALE_RUNNING_H", 6)),
       timeoutMs: Math.max(2000, int("OPENQ_JOBSTATUS_TIMEOUT_MS", 8000)),
     };
   })(),
@@ -483,6 +526,44 @@ const config = {
       enabled: true,
       host: str("OPENQ_TIMERS_HOST", "127.0.0.1"),
       timeoutMs: Math.max(1000, int("OPENQ_TIMERS_TIMEOUT_MS", 2500)),
+    };
+  })(),
+
+  // candlePattern_hdb (cfg_proc/modules/candlePattern/hdb.json, port 5095,
+  // hdbroot C:/data/db1/ta) - the daily multi-timeframe candlestick-pattern
+  // scan (`candlePattern` table, modules/analytics/candle/run.q) for the
+  // EQ > Candles page (/api/eq/patterns, /api/eq/signals). Default
+  // 127.0.0.1:5095; off/none/0 disables the page.
+  candlePattern: (function () {
+    const hp = str("OPENQ_CANDLEPATTERN_HDB", "127.0.0.1:5095");
+    if (!hp || /^(off|none|0|false)$/i.test(hp)) return { enabled: false };
+    const [h, p] = hp.split(":");
+    return {
+      enabled: true,
+      host: h || "127.0.0.1",
+      port: Number(p) || 5095,
+      maxDays: Math.max(1, int("OPENQ_CANDLEPATTERN_MAX_DAYS", 30)),
+      timeoutMs: Math.max(cepTimeoutMs, int("OPENQ_CANDLEPATTERN_TIMEOUT_MS", 15000)),
+    };
+  })(),
+
+  // the backtest service (modules/backtest/service.q, started with
+  // scripts/startStop/startupBacktest.sh - not a cfg_proc/ module, see
+  // that file's own header) - loads C:/data/db1/efx's fx_m1_massive once
+  // and exposes .bt.svc.run/.bt.svc.meta for the Backtest page
+  // (/api/backtest/run, /api/backtest/meta). Default 127.0.0.1:5097;
+  // off/none/0 disables the page. Backtests are real, if modest,
+  // computation (a month of 1-min bars through a rolling-window pipeline)
+  // so this gets its own generous timeout, not cepTimeoutMs.
+  backtest: (function () {
+    const hp = str("OPENQ_BACKTEST", "127.0.0.1:5097");
+    if (!hp || /^(off|none|0|false)$/i.test(hp)) return { enabled: false };
+    const [h, p] = hp.split(":");
+    return {
+      enabled: true,
+      host: h || "127.0.0.1",
+      port: Number(p) || 5097,
+      timeoutMs: Math.max(cepTimeoutMs, int("OPENQ_BACKTEST_TIMEOUT_MS", 30000)),
     };
   })(),
 

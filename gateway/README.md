@@ -64,9 +64,12 @@ All via env (or `.env`, same keys). Defaults in `.env.example`. Key ones:
 | `OPENQ_OHLC_STREAM` / `_TABLE` / `_PRICE` | `127.0.0.1:5030` / `rate` / `mid` | the price feed the eFX Charts page buckets |
 | `OPENQ_OHLC_SYMS` | `EURUSD,GBPUSD,AUDUSD,NZDUSD,EURGBP` | currency-pair allow-list for `/api/ohlc`; empty ⇒ 6-upper-letter FX shape check |
 | `OPENQ_EQ_HDB` / `_TABLE` / `_MAX_DAYS` | `127.0.0.1:5090` / `eq_m1_yfinance` / `21` | `eq_hdb` for the EQ > Charts page (`/api/eq/*`); `off`/`none`/`0` disables |
-| `OPENQ_HDBHEALTH` | `127.0.0.1:5023` | `mon_hdb` — serves all three `/api/hdbhealth` sources (`archive`, `eq`, `mon`); `off`/`none`/`0` to disable |
-| `OPENQ_HDBHEALTH_SOURCES` | *(archive+eq+mon)* | override the source list: `name=host:port[:archive\|live],…` |
-| `OPENQ_HDBHEALTH_EQ_BOUND_DAYS` | `400` | lookback window for the bounded `eq` (`tableHealthEq`) archive scan |
+| `OPENQ_CANDLEPATTERN_HDB` / `_MAX_DAYS` | `127.0.0.1:5095` / `30` | `candlePattern_hdb` for the EQ > Candles page (`/api/eq/patterns`, `/api/eq/signals`); `off`/`none`/`0` disables |
+| `OPENQ_BACKTEST` / `_TIMEOUT_MS` | `127.0.0.1:5097` / `30000` | `modules/backtest/service.q` for the eFX > Backtest page (`/api/backtest/*`) - started separately, see that section; `off`/`none`/`0` disables |
+| `OPENQ_HDBHEALTH` | `127.0.0.1:5023` | `mon_hdb` — serves all six `/api/hdbhealth` sources (`archive`, `eq`, `futures`, `mon`, `rates`, `ta`); `off`/`none`/`0` to disable |
+| `OPENQ_HDBHEALTH_SOURCES` | *(archive+eq+futures+mon+rates+ta)* | override the source list: `name=host:port[:archive\|live],…` |
+| `OPENQ_HDBHEALTH_EQ_BOUND_DAYS` / `_FUTURES_BOUND_DAYS` / `_RATES_BOUND_DAYS` | `400` each | lookback window for each bounded `tableHealth<Name>` archive scan |
+| `OPENQ_HDBHEALTH_TA_BOUND_DAYS` | `60` | lookback window for the bounded `ta` (`tableHealthTa`) archive scan — a much shorter real history than the yfinance ones |
 | `OPENQ_LOG_DIR` | `../../openQ/scripts/logs` | dir of openQ's per-role `.log` files, for `/api/logs` |
 | `OPENQ_LOG_FILES` | core roles + `bymod_*` | which `<name>.log` to surface — exact names and/or `prefix*` globs; `*` for all |
 | `OPENQ_TESTS_DIR` | `../../openQ/tests` | openQ's `tests/` dir — `/api/tests` reads `logs/results/`, `POST /api/tests/run` runs `sh/run_all.sh` |
@@ -208,6 +211,11 @@ anchors on `exec max date from select date from jobStatus` (real rows
 only). Rows are folded into one record per run — the latest event
 timestamp wins, so an end row supersedes its start row.
 
+A run still `RUNNING` more than `OPENQ_JOBSTATUS_STALE_RUNNING_H` hours
+after it started (a crashed job, or a bare `.mon.job.start` test call with
+no `.mon.job.end`) is dropped from `rows` / `runs` / `running` /
+`summary`; `summary.staleRunningHidden` reports how many.
+
 `?days=<1..120>` sets the HDB lookback (default `OPENQ_JOBSTATUS_HIST_DAYS`).
 
 ```json
@@ -230,6 +238,7 @@ timestamp wins, so an end row supersedes its start row.
 | `OPENQ_JOBSTATUS_RDB` | `127.0.0.1:5021,127.0.0.1:5101` | mon RDB instances for realtime; `off`/`none`/`0` disables `/api/jobstatus` |
 | `OPENQ_JOBSTATUS_IDB` | `127.0.0.1:5022` | mon IDB for staged-but-unpromoted rows (jobs that ran earlier today); `off` skips it |
 | `OPENQ_JOBSTATUS_HDB` | `127.0.0.1:5023` | mon HDB for history; `off` skips the historical query |
+| `OPENQ_JOBSTATUS_STALE_RUNNING_H` | `6` | a RUNNING run still un-ended this many hours after it started is hidden from every list (orphaned / test); `summary.staleRunningHidden` counts them; `0` = never hide |
 | `OPENQ_JOBSTATUS_HIST_DAYS` | `14` | default HDB lookback (client `?days=` overrides, capped 120) |
 | `OPENQ_JOBSTATUS_TIMEOUT_MS` | `8000` | per-endpoint query timeout |
 
@@ -422,6 +431,63 @@ the last N HDB partitions via `.Q.pv` indexed from the end.
 | `OPENQ_EQ_TABLE` | `eq_m1_yfinance` | the minute-bar table to read |
 | `OPENQ_EQ_MAX_DAYS` | `21` | upper bound on the `days` param |
 
+### `GET /api/eq/patterns` · `GET /api/eq/signals`
+
+Pre-computed candlestick-pattern hits for the **EQ > Candles** page, read
+off `candlePattern_hdb` (`OPENQ_CANDLEPATTERN_HDB`, default
+`127.0.0.1:5095` - `cfg_proc/modules/candlePattern/hdb.json`, hdbroot
+`C:/data/db1/ta`). One table, `candlePattern`
+(`schemas/schema_candlepattern.q`), produced in daily batches by
+`modules/analytics/candle/run.q` - the full 32-pattern candle.q library
+scanned across 10 timeframes (`1m`..`1d`), one row per `(sym, timeframe,
+pattern)` that actually fired. `src/candlePattern.js`; `503` with a "start
+the candlePattern module" hint when the HDB is down.
+
+| route | params | returns |
+| --- | --- | --- |
+| `/api/eq/patterns` | — | `{ patterns:[{pattern,direction,count}], timeframes:[…], dateFrom, dateTo, scannedThrough }` - the pattern universe (`direction` = `bullish`/`bearish`/`both`/`neutral` from `.candle.meta`); grouped scan of the newest partition, cached 5 min |
+| `/api/eq/signals` | `sym`, `tf` (one of `1m 5m 10m 15m 30m 1h 2h 4h 8h 1d`), `pattern` (a name or `all`), `dir` (`long`\|`short`\|`both`), `days` (1-`OPENQ_CANDLEPATTERN_MAX_DAYS`) | `{ sym, timeframe, pattern, dir, days, count, byPattern:[{pattern,count}], signals:[{t,pattern,direction,signal}] }` - `dir` filters on `signal` sign (`+100` bullish instance / `-100` bearish / `+1` direction-less); cached 15 s per param combo |
+
+`sym` is validated `/^[0-9A-Za-z.\-]{1,14}$/`, `tf` against the timeframe
+whitelist, `pattern` against `/^[A-Za-z]{2,40}$/`; all passed as ``  `$"…" ``
+/ `` `name `` literals - no free-text reaches the query.
+
+| env | default | meaning |
+| --- | --- | --- |
+| `OPENQ_CANDLEPATTERN_HDB` | `127.0.0.1:5095` | `candlePattern_hdb` host:port; `off`/`none`/`0` disables the EQ Candles routes |
+| `OPENQ_CANDLEPATTERN_MAX_DAYS` | `30` | upper bound on the `days` param |
+| `OPENQ_CANDLEPATTERN_TIMEOUT_MS` | `15000` | per-query timeout |
+
+### `GET /api/backtest/meta` · `GET /api/backtest/run`
+
+The **eFX > Backtest** page: runs `modules/backtest/backtest.q`'s
+alpha→portfolio→risk→execution pipeline (a LEAN Algorithm Framework-style
+engine, one call per stage, see that file's own header) against real
+1-minute FX bars. Backed by `modules/backtest/service.q`
+(`OPENQ_BACKTEST`, default `127.0.0.1:5097`) - **not** a `cfg_proc/`
+module: it's a plain script, same idea as `run.q`'s own one-shot CLI
+report, just long-running so an archive load (`C:/data/db1/efx`) happens
+once instead of per request. Start/stop it with
+`scripts/startStop/startupBacktest.sh` / `shutdownBacktest.sh`, not the
+Control page. `503` with a "start it" hint when it's down.
+
+| route | params | returns |
+| --- | --- | --- |
+| `/api/backtest/meta` | — | `{ symbols:[{sym,sDate,eDate}], strategies:{name:[params]}, portfolios:[…], risks:[…], executions:[…] }` - the full symbol/date-range universe (1768 symbols) and every pipeline-stage name with its own param list. Precomputed once when `service.q` starts (a full-archive by-sym scan takes ~45s), so this itself is instant - cached another 5 min gateway-side on top |
+| `/api/backtest/run` | `sym`, `sDate`/`eDate` (`YYYY-MM-DD`), `strategy` (`sma`\|`meanrev`\|`momentum`\|`candle`) + its own params (`fastN`/`slowN`, `lookback`/`zEntry`, `lookback`, or `pattern`), `portfolio` (`direction`\|`confweighted`), `risk` (`none`\|`maxpos`\|`maxdd`) + `maxAbsPos`/`ddLimit`, `execution` (`immediate`\|`twap`) + `phaseIn`, `costBp`, `lag`, `barsPerYear` | `{ sym, sDate, eDate, strategy, portfolio, risk, execution, bars, stats:{totalReturn,sharpe,maxDrawdown,hitRate,numTrades,avgTurnover}, curve:[{t,close,direction,pos,netRet,equity}] }` |
+
+Every dynamic value is rendered as a validated q literal (`qlit.js`'s
+`symbolLit`, plus this file's own `intLit`/`floatLit`/`dateLit`/
+`patternLit`/`enumLit`/`dictLit`) into one `.bt.svc.run[...]` call -
+never a client string forwarded verbatim, same discipline `buildGwQuery`
+uses for `/api/query`. An unknown strategy/portfolio/risk/execution name
+is a `400` with the same message `run.q`'s own CLI dispatch would give.
+
+| env | default | meaning |
+| --- | --- | --- |
+| `OPENQ_BACKTEST` | `127.0.0.1:5097` | backtest service host:port; `off`/`none`/`0` disables the page |
+| `OPENQ_BACKTEST_TIMEOUT_MS` | `30000` | per-request timeout - a real (if modest) computation, not a cached read |
+
 ### `GET /api/report`
 
 Per-symbol Desk Risk & TCA table read off the report module's CEP
@@ -433,21 +499,39 @@ symbol is absent from a domain). The endpoint adds an `allInBp` per row and
 by-bucket / totals rollups. No parameters. Enabled only when
 `OPENQ_REPORT_CEP` is set. The dashboard's **Desk Risk** page renders it.
 
-### `GET /api/hdbhealth` &nbsp;·&nbsp; `?source=archive|eq|mon`
+### `GET /api/hdbhealth` &nbsp;·&nbsp; `?source=archive|eq|futures|mon|rates|ta`
 
 Selectable **sources** — one button each on the HDB Health page (the
 response carries the full `sources` list `[{name, kind, target}]` and the
 resolved `source`; an unknown `?source=` falls back to the default,
-`archive`):
+`archive`). One source per top-level folder actually present under
+`C:/data/db1/` (`efx`, `eq`, `futures`, `mon`, `rates`, `ta` as of
+2026-09-05):
 
 | `source` | kind | what |
 | --- | --- | --- |
-| `archive` *(default)* | archive | the on-disk `tableHealth` / `tableHealthTick` scan archive `examples/scripts/05_table_health_scan.q` writes under `C:/data/db1/mon` (one row per `(tab, date)`, `.oq.hk.tableHealth` shape), read off `mon_hdb` |
-| `eq` | archive | the `tableHealthEq` scan archive (same `05_table_health_scan.q`, `-hdbroot C:/data/db1/eq -schema schemas/schema_eq_scan.q -savetab tableHealthEq`), the 3 minute-bar tables. A single "eq HDB" source with the same rows-per-month / archive-completeness / rows-per-day panels as `archive` — the old live `.Q.pt` scan of `eq_hdb` had none of those. Also written into `C:/data/db1/mon` so it is read off `mon_hdb`, but only the ~35 partitions it was scanned into carry that splay, so the reader stays **bounded** (`OPENQ_HDBHEALTH_EQ_BOUND_DAYS`, default 400) and re-derives the honest date range / partition count / latest-with-data status from the bounded `recent` window (the scan's own stored `oldestDate` counts `.Q.chk` stub dirs across the whole `/mon` root). Re-run the scan after an EOD to refresh it. |
-| `mon` | live | a **live** scan of `mon_hdb`'s own `.Q.pt` tables (`logs`, `pidstats`, `tableHealth`, `tableHealthTick`, `tableHealthEq`) |
+| `archive` *(default)* | archive | the on-disk `tableHealth` / `tableHealthTick` scan archive `examples/scripts/05_table_health_scan.q` writes under `C:/data/db1/mon` (one row per `(tab, date)`, `.oq.hk.tableHealth` shape), read off `mon_hdb` — the `C:/data/db1/efx` folder |
+| `eq` | archive | the `tableHealthEq` scan archive (same `05_table_health_scan.q`, `-hdbroot C:/data/db1/eq -schema schemas/schema_yfinance.q -tables eq_m1_yfinance eq_d1_yfinance -savetab tableHealthEq`) |
+| `futures` | archive | the `tableHealthFutures` scan archive (`-hdbroot C:/data/db1/futures -schema schemas/schema_yfinance.q -tables futures_m1_yfinance futures_d1_yfinance -savetab tableHealthFutures`) |
+| `mon` | live | a **live** scan of `mon_hdb`'s own `.Q.pt` tables (`logs`, `pidstats`, `jobStatus`, and every `tableHealth*` archive splay) |
+| `rates` | archive | the `tableHealthRates` scan archive (`-hdbroot C:/data/db1/rates -schema schemas/schema_yfinance.q -tables rateIndices_m1_yfinance rateIndices_d1_yfinance -savetab tableHealthRates`) |
+| `ta` | archive | the `tableHealthTa` scan archive (`-hdbroot C:/data/db1/ta -schema schemas/schema_candlepattern.q -tables candlePattern -savetab tableHealthTa`) — `modules/analytics/candle`'s daily scan output, not raw market data, but a real folder under `db1` worth the same completeness view |
+
+`eq`/`futures`/`rates`/`ta` are each a single "\<name\> HDB" source with the
+same rows-per-month / archive-completeness / rows-per-day panels as
+`archive` — the equivalent live `.Q.pt` scan of that module's own hdb has
+none of those. Each is also written into `C:/data/db1/mon` so it's read off
+`mon_hdb`, but only the bounded window it was actually scanned into carries
+that splay, so the reader stays **bounded**
+(`OPENQ_HDBHEALTH_EQ_BOUND_DAYS`/`_FUTURES_BOUND_DAYS`/`_RATES_BOUND_DAYS`/
+`_TA_BOUND_DAYS`, default 400/400/400/60) and re-derives the honest date
+range / partition count / latest-with-data status from the bounded `recent`
+window (the scan's own stored `oldestDate` counts `.Q.chk` stub dirs across
+the whole `/mon` root). Re-run the relevant scan after an EOD to refresh it.
 
 Override the set with `OPENQ_HDBHEALTH_SOURCES="name=host:port[:archive|live],…"`;
-otherwise `OPENQ_HDBHEALTH` is the `archive`/`eq`/`mon` target (all read off `mon_hdb`).
+otherwise `OPENQ_HDBHEALTH` is the `archive`/`eq`/`futures`/`mon`/`rates`/`ta`
+target (all read off `mon_hdb`).
 
 A **live** scan walks the HDB process's `.Q.pt` right now — per table:
 partition count (with data), total rows, rows in the newest partition,
@@ -899,12 +983,14 @@ src/modules.js       cfg_proc topology + live probe for /api/modules
 src/procMon.js       /api/procmon - every openQ proc (modules topology + probe) x pidstats, flat, for the Process Mon page
 src/ohlc.js          rolling OHLC ring from a .u.sub price feed for /api/ohlc
 src/eqOhlc.js         eq_m1_yfinance minute bars off eq_hdb for /api/eq/*
+src/candlePattern.js  candlePattern hits off candlePattern_hdb for /api/eq/patterns + /api/eq/signals
+src/backtest.js       modules/backtest/service.q's .bt.svc.run/.bt.svc.meta for /api/backtest/run + /api/backtest/meta
 src/queryMon.js       .util.gw.queue/.servers rollup per gateway for /api/querymon
 src/pidstats.js       live pidstats off the mon RDB pair (unioned) for /api/pidstats
 src/jobStatus.js      mon `jobStatus` table - realtime (mon RDB pair) + staged (mon IDB segments) + history (mon HDB) - for /api/jobstatus
 src/timers.js        every process's .util.timer.tab via a probe per cfg_proc node (reuses Modules topology) for /api/timers
 src/report.js        read the report CEP's .report.latest for /api/report
-src/hdbHealth.js     /api/hdbhealth sources: tableHealth / tableHealthEq archives off mon_hdb + a live .Q.pt scan of mon_hdb (TTL-cached)
+src/hdbHealth.js     /api/hdbhealth sources: tableHealth / tableHealthEq / tableHealthFutures / tableHealthRates / tableHealthTa archives off mon_hdb + a live .Q.pt scan of mon_hdb (TTL-cached)
 src/prime.js         read the primefinance CEP's .prime.* state for /api/prime
 src/tables.js        /api/tables inventory: each pipeline's RDB pair (per-table max across active/standby), each IDB's staged-since-EOD segment counts, + HDBs
 src/explore.js       /api/explore - guarded ad-hoc `select` against any RDB/HDB tableSource (sym/time/order/limit filters, all q-literalised; no free-text where)

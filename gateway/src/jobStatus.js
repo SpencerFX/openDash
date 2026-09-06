@@ -88,6 +88,13 @@ const spanMs = (v) => {
 class JobStatusReader {
   constructor(opts) {
     this.histDays = Math.max(1, Math.min(120, opts.histDays || 14));
+    // A run whose latest event is still RUNNING this long after it started
+    // is treated as orphaned (a crashed job, or a bare .mon.job.start test
+    // call that never got its .mon.job.end) and dropped from every list.
+    // Real openQ jobs go through .mon.job.run, which always pairs the
+    // RUNNING row with a SUCCESS/FAILED within seconds-to-minutes. 0 = keep
+    // every RUNNING row regardless of age.
+    this.staleRunningMs = Math.max(0, Number(opts.staleRunningH) || 0) * 3600 * 1000;
     const eps =
       opts.endpoints && opts.endpoints.length ? opts.endpoints : [{ host: opts.host || "127.0.0.1", port: opts.port || 5021 }];
     this.rdb = eps.map(
@@ -183,7 +190,7 @@ class JobStatusReader {
         byRun.set(k, { ...(cur || {}), ...r, firstSeen: Math.min(cur?.firstSeen ?? Infinity, r.timestamp || Infinity) });
       }
     }
-    const runs = [...byRun.values()]
+    const allRuns = [...byRun.values()]
       .map((r) => ({
         sym: r.sym,
         jobName: r.jobName,
@@ -197,6 +204,17 @@ class JobStatusReader {
         live: r.status === "RUNNING",
       }))
       .sort((a, b) => (b.startTime || 0) - (a.startTime || 0));
+
+    // drop orphaned RUNNING rows older than the cutoff (stale test batches /
+    // crashed jobs) from every downstream list, count how many
+    const staleCut = this.staleRunningMs ? Date.now() - this.staleRunningMs : null;
+    const isStale = (r) => staleCut != null && r.live && (r.startTime || 0) < staleCut;
+    const staleKeys = new Set(
+      staleCut != null ? allRuns.filter(isStale).map((r) => `${r.sym}|${r.jobName}|${r.startTime}`) : []
+    );
+    const staleRunning = staleKeys.size;
+    const runs = staleCut != null ? allRuns.filter((r) => !isStale(r)) : allRuns;
+    if (staleKeys.size) rows = rows.filter((r) => !staleKeys.has(`${r.sym}|${r.jobName}|${r.startTime}`));
 
     const running = runs
       .filter((r) => r.live)
@@ -224,6 +242,8 @@ class JobStatusReader {
         failed: last24.filter((r) => r.status === "FAILED").length,
         running: last24.filter((r) => r.live).length,
       },
+      staleRunningHidden: staleRunning,
+      staleRunningH: this.staleRunningMs ? this.staleRunningMs / 3600000 : 0,
     };
 
     return {
