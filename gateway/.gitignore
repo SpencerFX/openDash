@@ -1,3 +1,15 @@
-node_modules
+node_modules/
 .env
+.env.*
+!.env.example
+logs/
 *.log
+nohup.out
+*.pid
+*.pids
+.cache/
+coverage/
+.DS_Store
+Thumbs.db
+*.swp
+*~

@@ -23,7 +23,9 @@ const { ExploreReader } = require("./explore");
 const { CatalogReader } = require("./catalog");
 const { ControlManager } = require("./control");
 const { ReplayManager } = require("./replay");
-const { EqOhlcReader } = require("./eqOhlc");
+const { EqOhlcReader } = require("./eqOhlc"); // also drives fxOhlc (same class, fx_hdb target)
+const { CandlePatternReader } = require("./candlePattern");
+const { BacktestReader } = require("./backtest");
 const { QueryMonReader } = require("./queryMon");
 const { PidstatsReader } = require("./pidstats");
 const { JobStatusReader } = require("./jobStatus");
@@ -166,6 +168,10 @@ function createServer() {
   const control = config.control.enabled ? new ControlManager(config.control) : null;
   const replay = config.replay && config.replay.enabled ? new ReplayManager(config.replay) : null;
   const eqOhlc = config.eq && config.eq.enabled ? new EqOhlcReader(config.eq) : null;
+  const fxOhlc = config.fx && config.fx.enabled ? new EqOhlcReader(config.fx) : null;
+  const candlePattern =
+    config.candlePattern && config.candlePattern.enabled ? new CandlePatternReader(config.candlePattern) : null;
+  const backtest = config.backtest && config.backtest.enabled ? new BacktestReader(config.backtest) : null;
   const queryMon = config.queryMon && config.queryMon.enabled ? new QueryMonReader(config.queryMon) : null;
   const pidstats = config.pidstats && config.pidstats.enabled ? new PidstatsReader(config.pidstats) : null;
   const jobStatus = config.jobStatus && config.jobStatus.enabled ? new JobStatusReader(config.jobStatus) : null;
@@ -215,6 +221,9 @@ function createServer() {
           control: control ? control.status() : { enabled: false },
           replay: replay ? replay.status() : { enabled: false },
           eq: eqOhlc ? eqOhlc.status() : { enabled: false },
+          fx: fxOhlc ? fxOhlc.status() : { enabled: false },
+          candlePattern: candlePattern ? candlePattern.status() : { enabled: false },
+          backtest: backtest ? backtest.status() : { enabled: false },
           queryMon: queryMon ? queryMon.status() : { enabled: false },
           pidstats: pidstats ? pidstats.status() : { enabled: false },
           jobStatus: jobStatus ? jobStatus.status() : { enabled: false },
@@ -344,6 +353,73 @@ function createServer() {
         if (req.method !== "GET") return send(res, 405, { error: "use GET" });
         if (!eqOhlc) { const e = new Error("eq disabled (set OPENQ_EQ_HDB to the eq_hdb host:port)"); e.statusCode = 503; throw e; }
         return send(res, 200, await eqOhlc.bars(url.searchParams.get("sym"), url.searchParams.get("days")));
+      }
+      if (url.pathname === "/api/fx/syms") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!fxOhlc) { const e = new Error("fx disabled (set OPENQ_FX_HDB to the fx_hdb host:port)"); e.statusCode = 503; throw e; }
+        return send(res, 200, await fxOhlc.syms());
+      }
+      if (url.pathname === "/api/fx/bars") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!fxOhlc) { const e = new Error("fx disabled (set OPENQ_FX_HDB to the fx_hdb host:port)"); e.statusCode = 503; throw e; }
+        return send(res, 200, await fxOhlc.bars(url.searchParams.get("sym"), url.searchParams.get("days")));
+      }
+      if (url.pathname === "/api/eq/patterns") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!candlePattern) { const e = new Error("candlePattern disabled (set OPENQ_CANDLEPATTERN_HDB to candlePattern_hdb host:port)"); e.statusCode = 503; throw e; }
+        return send(res, 200, await candlePattern.meta());
+      }
+      if (url.pathname === "/api/eq/signals") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!candlePattern) { const e = new Error("candlePattern disabled (set OPENQ_CANDLEPATTERN_HDB to candlePattern_hdb host:port)"); e.statusCode = 503; throw e; }
+        return send(
+          res,
+          200,
+          await candlePattern.signals({
+            sym: url.searchParams.get("sym"),
+            tf: url.searchParams.get("tf"),
+            pattern: url.searchParams.get("pattern"),
+            dir: url.searchParams.get("dir"),
+            days: url.searchParams.get("days"),
+          })
+        );
+      }
+
+      if (url.pathname === "/api/backtest/meta") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!backtest) { const e = new Error("backtest disabled (set OPENQ_BACKTEST to the backtest service host:port)"); e.statusCode = 503; throw e; }
+        return send(res, 200, await backtest.meta());
+      }
+      if (url.pathname === "/api/backtest/run") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!backtest) { const e = new Error("backtest disabled (set OPENQ_BACKTEST to the backtest service host:port)"); e.statusCode = 503; throw e; }
+        const sp = url.searchParams;
+        return send(
+          res,
+          200,
+          await backtest.run({
+            sym: sp.get("sym") || "aud_cad",
+            sDate: sp.get("sDate") || "2020-01-01",
+            eDate: sp.get("eDate") || "2020-01-31",
+            strategy: sp.get("strategy") || "sma",
+            strategyParams: {
+              fastN: sp.get("fastN") || "5",
+              slowN: sp.get("slowN") || "20",
+              lookback: sp.get("lookback") || "20",
+              zEntry: sp.get("zEntry") || "1.5",
+              pattern: sp.get("pattern") || "hammer",
+            },
+            portfolio: sp.get("portfolio") || "direction",
+            risk: sp.get("risk") || "none",
+            execution: sp.get("execution") || "immediate",
+            costBp: sp.get("costBp"),
+            lag: sp.get("lag"),
+            maxAbsPos: sp.get("maxAbsPos"),
+            ddLimit: sp.get("ddLimit"),
+            phaseIn: sp.get("phaseIn"),
+            barsPerYear: sp.get("barsPerYear"),
+          })
+        );
       }
 
       if (url.pathname === "/api/ohlc") {
@@ -577,6 +653,9 @@ function createServer() {
     if (hdbHealth) hdbHealth.start();
     if (ohlc) ohlc.start();
     if (eqOhlc) eqOhlc.start();
+    if (fxOhlc) fxOhlc.start();
+    if (candlePattern) candlePattern.start();
+    if (backtest) backtest.start();
     if (queryMon) queryMon.start();
     if (pidstats) pidstats.start();
     if (jobStatus) jobStatus.start();
@@ -601,6 +680,9 @@ function createServer() {
     if (hdbHealth) await hdbHealth.stop();
     if (ohlc) await ohlc.stop();
     if (eqOhlc) await eqOhlc.stop();
+    if (fxOhlc) await fxOhlc.stop();
+    if (candlePattern) await candlePattern.stop();
+    if (backtest) await backtest.stop();
     if (queryMon) await queryMon.stop();
     if (pidstats) await pidstats.stop();
     if (jobStatus) await jobStatus.stop();
@@ -610,7 +692,7 @@ function createServer() {
     await procMon.stop();
   }
 
-  return { httpServer, wss, gws, stream, markout, spread, prime, report, hdbHealth, ohlc, eqOhlc, tables, explore, procMon, control, replay, queryMon, pidstats, jobStatus, timers, start, stop };
+  return { httpServer, wss, gws, stream, markout, spread, prime, report, hdbHealth, ohlc, eqOhlc, fxOhlc, candlePattern, backtest, tables, explore, procMon, control, replay, queryMon, pidstats, jobStatus, timers, start, stop };
 }
 
 module.exports = { createServer };

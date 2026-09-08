@@ -1,0 +1,83 @@
+# ─── Dependencies ────────────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+.yarn/*
+!.yarn/patches
+!.yarn/releases
+!.yarn/plugins
+!.yarn/sdks
+!.yarn/versions
+
+# ─── Build output ───────────────────────────────────────────────────
+dist/
+build/
+out/
+*.tsbuildinfo
+
+# ─── Bundler / dev-server caches ────────────────────────────────────
+.vite/
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+vite.config.*.timestamp-*
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# ─── Environment / secrets ─────────────────────────────────────────
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+*.pem
+*.key
+
+# ─── Runtime artifacts / logs ──────────────────────────────────────
+logs/
+*.log
+nohup.out
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.pid
+*.pids
+*.pid.lock
+*.seed
+
+# ─── Test / coverage ───────────────────────────────────────────────
+coverage/
+.nyc_output/
+*.lcov
+
+# ─── Editors / IDEs ────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-workspace
+*.sublime-project
+
+# ─── OS cruft ──────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ─── Misc temp ─────────────────────────────────────────────────────
+*.tmp
+*.temp
+.tmp/
+tmp/
+*.local
+*.orig
+*.bak
