@@ -1,5 +1,7 @@
 "use strict";
 
+const fs = require("fs");
+const path = require("path");
 const { QSession } = require("./qSession");
 const { toRows } = require("./qshape");
 
@@ -85,6 +87,27 @@ const spanMs = (v) => {
   return null;
 };
 
+// next UTC datetime (ms) at time-of-day `triggerStr` ("HH:MM:SS.mmm", UTC) -
+// today at that time if still ahead of `nowMs`, else tomorrow. The
+// housekeeping timer (.oq.hk.run) compares `time$.z.p (UTC) against this,
+// firing once per day on the first tick past it; 00:00:00 => the next UTC
+// midnight.
+function nextDailyUtcMs(triggerStr, nowMs) {
+  const m = /^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(String(triggerStr || ""));
+  if (!m) return null;
+  const offMs = ((+m[1]) * 3600 + (+m[2]) * 60 + (+(m[3] || 0))) * 1000;
+  const d = new Date(nowMs);
+  let t = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) + offMs;
+  if (t <= nowMs) t += 86400000;
+  return t;
+}
+
+// "08:30:00.000" -> "08:30 UTC" ; "00:00:00.000" -> "00:00 UTC"
+const fmtTrigger = (s) => {
+  const m = /^\s*(\d{1,2}):(\d{2})/.exec(String(s || ""));
+  return m ? `${m[1].padStart(2, "0")}:${m[2]} UTC` : String(s || "");
+};
+
 class JobStatusReader {
   constructor(opts) {
     this.histDays = Math.max(1, Math.min(120, opts.histDays || 14));
@@ -95,6 +118,12 @@ class JobStatusReader {
     // RUNNING row with a SUCCESS/FAILED within seconds-to-minutes. 0 = keep
     // every RUNNING row regardless of age.
     this.staleRunningMs = Math.max(0, Number(opts.staleRunningH) || 0) * 3600 * 1000;
+    this.cfgDir = opts.cfgDir || null;
+    try {
+      this.eodRx = new RegExp(opts.eodPattern || "_eod|_daily", "i");
+    } catch {
+      this.eodRx = /_eod|_daily/i;
+    }
     const eps =
       opts.endpoints && opts.endpoints.length ? opts.endpoints : [{ host: opts.host || "127.0.0.1", port: opts.port || 5021 }];
     this.rdb = eps.map(
@@ -133,6 +162,92 @@ class JobStatusReader {
       idb: this.idb ? { target: this.idb.target, connected: this.idb.connected } : null,
       histDays: this.histDays,
     };
+  }
+
+  // Scan cfg_proc for EOD housekeeping configs: modules/<m>/housekeeping.json
+  // and one nested level (modules/yfinance/<table>/housekeeping.json). Only
+  // those whose -hkscript is an eod_housekeeping.q count. Returns the daily
+  // trigger time + dayOffset + the process -name for each.
+  _findHkConfigs() {
+    if (!this.cfgDir) return [];
+    const modDir = path.join(this.cfgDir, "modules");
+    const rd = (d) => {
+      try { return fs.readdirSync(d, { withFileTypes: true }); } catch { return []; }
+    };
+    const out = [];
+    const tryDir = (dir, modName) => {
+      let j;
+      try { j = JSON.parse(fs.readFileSync(path.join(dir, "housekeeping.json"), "utf8")); } catch { return; }
+      const p = j.params || {};
+      if (!/eod/i.test(String(p.hkscript || "")) && !/eod/i.test(String(j.name || ""))) return;
+      out.push({
+        module: modName,
+        proc: j.name || `${modName.split("/").pop()}_housekeeping`,
+        triggerTimeUtc: String(p.eodTriggerTime || "08:30:00.000"),
+        dayOffset: p.eodDayOffset != null ? Number(p.eodDayOffset) : 0,
+      });
+    };
+    for (const a of rd(modDir)) {
+      if (!a.isDirectory()) continue;
+      const ap = path.join(modDir, a.name);
+      tryDir(ap, a.name);
+      for (const b of rd(ap)) if (b.isDirectory()) tryDir(path.join(ap, b.name), `${a.name}/${b.name}`);
+    }
+    return out;
+  }
+
+  // "EOD & daily savedowns" schedule for the JobStatus page, below Runs.
+  // Seeded from the housekeeping.json configs (so a scheduled job with no
+  // recent run still lists, with next run derived from eodTriggerTime), then
+  // every jobName matching the eod/daily pattern gets its last run filled in
+  // from `runs` (jobs with runs but no config - e.g. candlePattern_daily,
+  // driven by an external scheduler - list as "on demand", no next run).
+  _schedule(runs) {
+    const now = Date.now();
+    const rows = new Map(); // jobName -> row
+
+    for (const c of this._findHkConfigs()) {
+      const jobName = c.proc.replace(/_housekeeping$/, "") + "_eod_housekeeping";
+      rows.set(jobName, {
+        jobName,
+        proc: c.proc,
+        module: c.module,
+        schedule: `daily ${fmtTrigger(c.triggerTimeUtc)}`,
+        triggerTimeUtc: c.triggerTimeUtc,
+        dayOffset: c.dayOffset,
+        nextRun: nextDailyUtcMs(c.triggerTimeUtc, now),
+        lastRun: null,
+        lastEnd: null,
+        lastStatus: null,
+        lastDurationMs: null,
+      });
+    }
+
+    const lastByJob = new Map();
+    for (const r of runs) {
+      if (!r.jobName || !this.eodRx.test(r.jobName)) continue;
+      const cur = lastByJob.get(r.jobName);
+      if (!cur || (r.startTime || 0) > (cur.startTime || 0)) lastByJob.set(r.jobName, r);
+    }
+    for (const [jobName, r] of lastByJob) {
+      let row = rows.get(jobName);
+      if (!row) {
+        row = {
+          jobName, proc: r.sym || null, module: null,
+          schedule: "on demand", triggerTimeUtc: null, dayOffset: null, nextRun: null,
+        };
+        rows.set(jobName, row);
+      }
+      row.lastRun = r.startTime ?? null;
+      row.lastEnd = r.endTime ?? null;
+      row.lastStatus = r.status ?? null;
+      row.lastDurationMs = r.durationMs ?? null;
+      if (!row.proc && r.sym) row.proc = r.sym;
+    }
+
+    return [...rows.values()].sort(
+      (a, b) => (a.nextRun ?? Infinity) - (b.nextRun ?? Infinity) || String(a.jobName).localeCompare(String(b.jobName))
+    );
   }
 
   async read(daysRaw) {
@@ -262,6 +377,9 @@ class JobStatusReader {
       runs,
       running,
       summary,
+      schedule: (() => {
+        try { return this._schedule(runs); } catch { return []; }
+      })(),
     };
   }
 }

@@ -64,11 +64,12 @@ All via env (or `.env`, same keys). Defaults in `.env.example`. Key ones:
 | `OPENQ_OHLC_STREAM` / `_TABLE` / `_PRICE` | `127.0.0.1:5030` / `rate` / `mid` | the price feed the eFX Charts page buckets |
 | `OPENQ_OHLC_SYMS` | `EURUSD,GBPUSD,AUDUSD,NZDUSD,EURGBP` | currency-pair allow-list for `/api/ohlc`; empty ⇒ 6-upper-letter FX shape check |
 | `OPENQ_EQ_HDB` / `_TABLE` / `_MAX_DAYS` | `127.0.0.1:5090` / `eq_m1_yfinance` / `21` | `eq_hdb` for the EQ > Charts page (`/api/eq/*`); `off`/`none`/`0` disables |
+| `OPENQ_FX_HDB` / `_TABLE` / `_MAX_DAYS` | `127.0.0.1:5093` / `fx_m1_yfinance` / `30` | `fx_hdb` for the eFX > Charts page (`/api/fx/*`); `off`/`none`/`0` disables |
 | `OPENQ_CANDLEPATTERN_HDB` / `_MAX_DAYS` | `127.0.0.1:5095` / `30` | `candlePattern_hdb` for the EQ > Candles page (`/api/eq/patterns`, `/api/eq/signals`); `off`/`none`/`0` disables |
 | `OPENQ_BACKTEST` / `_TIMEOUT_MS` | `127.0.0.1:5097` / `30000` | `modules/backtest/service.q` for the eFX > Backtest page (`/api/backtest/*`) - started separately, see that section; `off`/`none`/`0` disables |
 | `OPENQ_HDBHEALTH` | `127.0.0.1:5023` | `mon_hdb` — serves all six `/api/hdbhealth` sources (`archive`, `eq`, `futures`, `mon`, `rates`, `ta`); `off`/`none`/`0` to disable |
 | `OPENQ_HDBHEALTH_SOURCES` | *(archive+eq+futures+mon+rates+ta)* | override the source list: `name=host:port[:archive\|live],…` |
-| `OPENQ_HDBHEALTH_EQ_BOUND_DAYS` / `_FUTURES_BOUND_DAYS` / `_RATES_BOUND_DAYS` | `400` each | lookback window for each bounded `tableHealth<Name>` archive scan |
+| `OPENQ_HDBHEALTH_FUTURES_BOUND_DAYS` / `_RATES_BOUND_DAYS` | `400` each | lookback window for each bounded `tableHealth<Name>` archive scan (`archive` and `eq` are whole-history, no bound) |
 | `OPENQ_HDBHEALTH_TA_BOUND_DAYS` | `60` | lookback window for the bounded `ta` (`tableHealthTa`) archive scan — a much shorter real history than the yfinance ones |
 | `OPENQ_LOG_DIR` | `../../openQ/scripts/logs` | dir of openQ's per-role `.log` files, for `/api/logs` |
 | `OPENQ_LOG_FILES` | core roles + `bymod_*` | which `<name>.log` to surface — exact names and/or `prefix*` globs; `*` for all |
@@ -218,6 +219,17 @@ no `.mon.job.end`) is dropped from `rows` / `runs` / `running` /
 
 `?days=<1..120>` sets the HDB lookback (default `OPENQ_JOBSTATUS_HIST_DAYS`).
 
+`schedule` drives the page's **EOD & daily savedowns** table (below Runs) —
+last run / next run for every daily savedown. Seeded from
+`cfg_proc/modules/*/housekeeping.json` and one nested level
+(`modules/yfinance/<table>/housekeeping.json`) whose `-hkscript` is an
+`eod_housekeeping.q`: `nextRun` is the next UTC occurrence of that config's
+`eodTriggerTime`, `schedule` is `daily HH:MM UTC`. Every `jobStatus`
+`jobName` matching `OPENQ_JOBSTATUS_EOD_PATTERN` (default `_eod|_daily`)
+then has its last run filled in; jobs with runs but no housekeeping config
+(e.g. `candlePattern_daily`, driven by an external scheduler) list with
+`schedule: "on demand"` and `nextRun: null`.
+
 ```json
 {
   "connected": true, "days": 7, "rdbConnected": true, "hdbConnected": true,
@@ -227,6 +239,11 @@ no `.mon.job.end`) is dropped from `rows` / `runs` / `running` /
   "runs":    [{ "sym": "…", "jobName": "monEod", "startTime": 0, "endTime": 0,
                 "durationMs": 4123, "status": "SUCCESS", "live": false }],
   "running": [{ "jobName": "…", "sym": "…", "startTime": 0, "elapsedMs": 900 }],
+  "schedule":[{ "jobName": "mon_eod_housekeeping", "proc": "mon_housekeeping",
+                "module": "mon", "schedule": "daily 00:00 UTC",
+                "triggerTimeUtc": "00:00:00.000", "dayOffset": 0,
+                "lastRun": 0, "lastEnd": 0, "lastStatus": "SUCCESS", "lastDurationMs": 4123,
+                "nextRun": 0 }],
   "summary": { "runs": 6, "jobs": 2, "procs": 2, "running": 0, "success": 5, "failed": 1,
                "successRate": 0.83, "avgDurationMs": 3800, "p95DurationMs": 6200,
                "maxDurationMs": 6200, "last24h": { "runs": 2, "success": 2, "failed": 0, "running": 0 } }
@@ -241,6 +258,8 @@ no `.mon.job.end`) is dropped from `rows` / `runs` / `running` /
 | `OPENQ_JOBSTATUS_STALE_RUNNING_H` | `6` | a RUNNING run still un-ended this many hours after it started is hidden from every list (orphaned / test); `summary.staleRunningHidden` counts them; `0` = never hide |
 | `OPENQ_JOBSTATUS_HIST_DAYS` | `14` | default HDB lookback (client `?days=` overrides, capped 120) |
 | `OPENQ_JOBSTATUS_TIMEOUT_MS` | `8000` | per-endpoint query timeout |
+| `OPENQ_CFG_DIR` | `../../openQ/cfg_proc` | scanned for `*/housekeeping.json` to derive each daily savedown's next-run time (`schedule`) |
+| `OPENQ_JOBSTATUS_EOD_PATTERN` | `_eod\|_daily` | case-insensitive `jobName` regex folded into the `schedule` table |
 
 ### `GET /api/timers`
 
@@ -431,6 +450,24 @@ the last N HDB partitions via `.Q.pv` indexed from the end.
 | `OPENQ_EQ_TABLE` | `eq_m1_yfinance` | the minute-bar table to read |
 | `OPENQ_EQ_MAX_DAYS` | `21` | upper bound on the `days` param |
 
+### `GET /api/fx/syms` · `GET /api/fx/bars`
+
+Identical to `/api/eq/*` - same `src/eqOhlc.js` class, just pointed at
+`fx_hdb` (`OPENQ_FX_HDB`, default `127.0.0.1:5093` -
+`cfg_proc/modules/fx/hdb.json`, hdbroot `C:/data/db1/efx`) for the
+`fx_m1_yfinance` table (1-minute spot bars, 28 G10 pairs from yfinance,
+`exchange` = `yfinance`). This is what the **eFX > Charts** page reads -
+historical bars with a day-count button row, no longer the live
+`/api/ohlc` ring. Returns the same `{ ..., bars:[{t,open,high,low,close,
+volume}], last, hi, lo, vol, changePct }` shape. `503` with a "start the
+fx module" hint when `fx_hdb` is down.
+
+| env | default | meaning |
+| --- | --- | --- |
+| `OPENQ_FX_HDB` | `127.0.0.1:5093` | `fx_hdb` host:port; `off`/`none`/`0` disables the eFX Charts routes |
+| `OPENQ_FX_TABLE` | `fx_m1_yfinance` | the minute-bar table to read |
+| `OPENQ_FX_MAX_DAYS` | `30` | upper bound on the `days` param |
+
 ### `GET /api/eq/patterns` · `GET /api/eq/signals`
 
 Pre-computed candlestick-pattern hits for the **EQ > Candles** page, read
@@ -510,8 +547,8 @@ resolved `source`; an unknown `?source=` falls back to the default,
 
 | `source` | kind | what |
 | --- | --- | --- |
-| `archive` *(default)* | archive | the on-disk `tableHealth` / `tableHealthTick` scan archive `examples/scripts/05_table_health_scan.q` writes under `C:/data/db1/mon` (one row per `(tab, date)`, `.oq.hk.tableHealth` shape), read off `mon_hdb` — the `C:/data/db1/efx` folder |
-| `eq` | archive | the `tableHealthEq` scan archive (same `05_table_health_scan.q`, `-hdbroot C:/data/db1/eq -schema schemas/schema_yfinance.q -tables eq_m1_yfinance eq_d1_yfinance -savetab tableHealthEq`) |
+| `archive` *(default)* | archive | the `C:/data/db1/efx` folder. `tableHealth` / `tableHealthTick` — the whole-history scan of the `fx_*_massive` / `fx_*_dukasCopy` bar+tick tables (one row per `(tab, date)`, `.oq.hk.tableHealth` shape) — **plus** a third `tableHealthFxYf` tab (`-tables fx_m1_yfinance fx_d1_yfinance`) surfacing the yfinance FX bars in the same root, also scanned across efx's whole 2009-> partition range so it shows full history alongside the rest. All read off `mon_hdb`. (`hdbHealth.js` still supports a per-tab `boundDays` if a future fx load is only scanned into a recent window.) |
+| `eq` | archive | the `tableHealthEqYf` scan archive (`05_table_health_scan.q -hdbroot C:/data/db1/eq -schema schemas/schema_yfinance.q -tables eq_m1_yfinance eq_d1_yfinance -savetab tableHealthEqYf`), scanned across that root's whole 2010-> partition range so it's unbounded and shows both tables' full history. Supersedes the older `tableHealthEq` splay, which an early scan had also written `futures_m1_yfinance` / `rateIndices_m1_yfinance` rows into (that stale splay is left orphaned; `futures` / `rates` have their own sources). |
 | `futures` | archive | the `tableHealthFutures` scan archive (`-hdbroot C:/data/db1/futures -schema schemas/schema_yfinance.q -tables futures_m1_yfinance futures_d1_yfinance -savetab tableHealthFutures`) |
 | `mon` | live | a **live** scan of `mon_hdb`'s own `.Q.pt` tables (`logs`, `pidstats`, `jobStatus`, and every `tableHealth*` archive splay) |
 | `rates` | archive | the `tableHealthRates` scan archive (`-hdbroot C:/data/db1/rates -schema schemas/schema_yfinance.q -tables rateIndices_m1_yfinance rateIndices_d1_yfinance -savetab tableHealthRates`) |
@@ -520,14 +557,15 @@ resolved `source`; an unknown `?source=` falls back to the default,
 `eq`/`futures`/`rates`/`ta` are each a single "\<name\> HDB" source with the
 same rows-per-month / archive-completeness / rows-per-day panels as
 `archive` — the equivalent live `.Q.pt` scan of that module's own hdb has
-none of those. Each is also written into `C:/data/db1/mon` so it's read off
-`mon_hdb`, but only the bounded window it was actually scanned into carries
-that splay, so the reader stays **bounded**
-(`OPENQ_HDBHEALTH_EQ_BOUND_DAYS`/`_FUTURES_BOUND_DAYS`/`_RATES_BOUND_DAYS`/
-`_TA_BOUND_DAYS`, default 400/400/400/60) and re-derives the honest date
-range / partition count / latest-with-data status from the bounded `recent`
-window (the scan's own stored `oldestDate` counts `.Q.chk` stub dirs across
-the whole `/mon` root). Re-run the relevant scan after an EOD to refresh it.
+none of those. Each is written into `C:/data/db1/mon` so it's read off
+`mon_hdb`. `eq` (`tableHealthEqYf`) is scanned across its root's whole
+partition range, so it's **unbounded** like `archive`. `futures`/`rates`/`ta`
+were only scanned into a recent window, so those readers stay **bounded**
+(`OPENQ_HDBHEALTH_FUTURES_BOUND_DAYS`/`_RATES_BOUND_DAYS`/`_TA_BOUND_DAYS`,
+default 400/400/60) and re-derive the honest date range / partition count /
+latest-with-data status from the bounded `recent` window (the scan's own
+stored `oldestDate` counts `.Q.chk` stub dirs across the whole `/mon`
+root). Re-run the relevant scan after an EOD to refresh it.
 
 Override the set with `OPENQ_HDBHEALTH_SOURCES="name=host:port[:archive|live],…"`;
 otherwise `OPENQ_HDBHEALTH` is the `archive`/`eq`/`futures`/`mon`/`rates`/`ta`
@@ -620,11 +658,13 @@ pair by default, plus any HDB you list — see `OPENQ_TABLE_SOURCES`). Per
 source: `connected`, process name/role, and per table `rows`, `columns`,
 `bytes` (`-22!`), and `lastTs` (newest `timestamp` value). Partitioned HDB
 tables are handled too: rows via `select count i by date`, `cols` off the
-name, `bytes` null, `lastTs` = newest partition date. Plus `totals`. No
-parameters.
+name, `bytes` null, `lastTs` = **that table's own newest partition that
+holds rows** (not `last .Q.pv` — a shared root like efx spans partitions
+long past a table that stopped loading, e.g. `fx_m1_yfinance`). Plus
+`totals`. No parameters.
 
-Each `OPENQ_TABLE_SOURCES` entry is `name=host:port[:kind]`, and `host:port`
-may repeat joined by **`+`**:
+Each `OPENQ_TABLE_SOURCES` entry is `name=host:port[:kind[:only[:boundDays]]]`,
+and `host:port` may repeat joined by **`+`**:
 
 - **rdb** (default) — a pipeline RDB, listed as a `+`-joined active/standby
   pair (`mon=…:5021+…:5101`). Both instances are surveyed and the higher
@@ -637,6 +677,33 @@ may repeat joined by **`+`**:
   the survey sums the row count of every numbered segment dir under
   `.oq.idb.root` per schema table — **rows staged since the last EOD**,
   pending promotion to the HDB.
+
+`only` — an optional 4th `:`-field, `|`-separated table names — restricts a
+source to just those tables, and is spliced into the survey (`tt inter`)
+**before** the per-partition count scan runs:
+
+- `eq_m1_yfinance=…:5061:rdb:eq_m1_yfinance+…:5116` — that pipeline's schema
+  also declares `fx`/`futures`/`rateIndices_m1_yfinance` (always 0 there);
+  the pin drops those phantom rows.
+
+`boundDays` — an optional 5th `:`-field, integer, **hdb only** — caps the
+per-partition `count i by date` to the last N partition-dates instead of the
+whole history. A root with thousands of partitions (efx ~5456, mon ~6191,
+mostly empty `.Q.chk` stubs) is otherwise minutes to survey even for a tiny
+table — the cost is the per-partition query dispatch, not the data. `rows`
+then means "rows in the last N days" (the page labels it `last Nd`); column
+count, `lastTs` and non-partitioned tables are unaffected. Leave `only`
+empty to bound without pinning:
+
+- `fx_hdb=127.0.0.1:5093:hdb::800` — all 7 efx tables (incl. the 20-billion-
+  row `fx_tick_massive`), counted over the last 800 days.
+- `mon_hdb=127.0.0.1:5023:hdb::400`, `ta_hdb=127.0.0.1:5095:hdb::800`.
+
+The reader keeps a 2.5 s per-source result cache and never runs more than
+one survey per source at a time — a client polling `/api/tables` every few
+seconds otherwise stacks surveys on any source slower than the poll (and a
+QSession timeout only gives up client-side; the HDB keeps grinding the
+abandoned `count i by date`).
 
 The dashboard's **Tables** page renders it with two-level collapsible
 grouping (`main.jsx`): top-level tiers **Demo**
@@ -982,7 +1049,7 @@ src/spread.js        read the spread CEP's .spread.snap for /api/spread
 src/modules.js       cfg_proc topology + live probe for /api/modules
 src/procMon.js       /api/procmon - every openQ proc (modules topology + probe) x pidstats, flat, for the Process Mon page
 src/ohlc.js          rolling OHLC ring from a .u.sub price feed for /api/ohlc
-src/eqOhlc.js         eq_m1_yfinance minute bars off eq_hdb for /api/eq/*
+src/eqOhlc.js         eq_m1_yfinance minute bars off eq_hdb for /api/eq/* — same class also serves /api/fx/* off fx_hdb (fx_m1_yfinance)
 src/candlePattern.js  candlePattern hits off candlePattern_hdb for /api/eq/patterns + /api/eq/signals
 src/backtest.js       modules/backtest/service.q's .bt.svc.run/.bt.svc.meta for /api/backtest/run + /api/backtest/meta
 src/queryMon.js       .util.gw.queue/.servers rollup per gateway for /api/querymon
@@ -990,7 +1057,7 @@ src/pidstats.js       live pidstats off the mon RDB pair (unioned) for /api/pids
 src/jobStatus.js      mon `jobStatus` table - realtime (mon RDB pair) + staged (mon IDB segments) + history (mon HDB) - for /api/jobstatus
 src/timers.js        every process's .util.timer.tab via a probe per cfg_proc node (reuses Modules topology) for /api/timers
 src/report.js        read the report CEP's .report.latest for /api/report
-src/hdbHealth.js     /api/hdbhealth sources: tableHealth / tableHealthEq / tableHealthFutures / tableHealthRates / tableHealthTa archives off mon_hdb + a live .Q.pt scan of mon_hdb (TTL-cached)
+src/hdbHealth.js     /api/hdbhealth sources: tableHealth / tableHealthTick / tableHealthFxYf / tableHealthEqYf / tableHealthFutures / tableHealthRates / tableHealthTa archives off mon_hdb + a live .Q.pt scan of mon_hdb (TTL-cached). Per-tab boundDays + per-source `only` whitelist.
 src/prime.js         read the primefinance CEP's .prime.* state for /api/prime
 src/tables.js        /api/tables inventory: each pipeline's RDB pair (per-table max across active/standby), each IDB's staged-since-EOD segment counts, + HDBs
 src/explore.js       /api/explore - guarded ad-hoc `select` against any RDB/HDB tableSource (sym/time/order/limit filters, all q-literalised; no free-text where)

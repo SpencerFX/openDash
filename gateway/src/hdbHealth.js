@@ -63,13 +63,19 @@ const RECENT = (t, b) =>
   `0!select rowsToday:first rowCountToday, bytesDisk:first bytesDisk, status:first status, lastTime:first lastTime ` +
   `by date, tab from ${t} where date>=${ANCHOR(t, b)}-180`;
 
-// { latest_<tab>, monthly_<tab>, recent_<tab> } for each configured table
+// { latest_<tab>, monthly_<tab>, recent_<tab> } for each configured table.
+// boundDays is per-tab-overridable (t.boundDays) - lets one source mix an
+// unbounded decades-deep archive (tableHealth) with a table that only
+// exists in a recent scan window (tableHealthFxYf), which MUST be bounded
+// or its query walks into a splay-less 2009 partition and OS-errors.
+const tabBound = (t, srcBound) => (t.boundDays != null ? t.boundDays : srcBound);
 const buildQueries = (tabs, boundDays) => {
   const q = {};
   for (const t of tabs) {
-    q[`latest_${t.name}`] = LATEST(t.name, boundDays);
-    q[`monthly_${t.name}`] = MONTHLY(t.name, boundDays);
-    q[`recent_${t.name}`] = RECENT(t.name, boundDays);
+    const b = tabBound(t, boundDays);
+    q[`latest_${t.name}`] = LATEST(t.name, b);
+    q[`monthly_${t.name}`] = MONTHLY(t.name, b);
+    q[`recent_${t.name}`] = RECENT(t.name, b);
   }
   return q;
 };
@@ -89,6 +95,14 @@ class HdbHealthReader extends CepReader {
     this.tabs = tabs;
     this.queries = queries;
     this.boundDays = opts.boundDays || null;
+    // whether ANY configured tab ended up bounded (per-tab or source-wide) -
+    // gates the honest-range re-derivation in read(); the per-row `_bounded`
+    // flag decides which tables it actually applies to
+    this.anyBounded = tabs.some((t) => tabBound(t, this.boundDays));
+    // optional per-source tab whitelist - the archive splay may physically
+    // carry rows for tables the source shouldn't surface (an over-broad
+    // early scan), so filter the reader's output down to `only` when set.
+    this.only = opts.only && opts.only.length ? new Set(opts.only) : null;
     this._cache = { at: 0, data: null };
     this._inflight = null;
   }
@@ -212,7 +226,10 @@ class HdbHealthReader extends CepReader {
       }));
 
     const recent = this.tabs
-      .flatMap((t) => recentOf((r[`recent_${t.name}`] || {}).rows, t.kind))
+      .flatMap((t) => {
+        const bounded = !!tabBound(t, this.boundDays);
+        return recentOf((r[`recent_${t.name}`] || {}).rows, t.kind).map((x) => ({ ...x, _bounded: bounded }));
+      })
       .sort((a, b) => (a.date < b.date ? -1 : 1));
 
     // For a bounded archive (eq history) the stored oldest/newest/partitionCnt
@@ -221,10 +238,13 @@ class HdbHealthReader extends CepReader {
     // 1-month-old table. And its LATEST row is anchored on today, which for a
     // live-growing HDB may be an in-progress (0-row) partition, flagging a
     // real table EMPTY. Recompute the honest range + latest-with-data from
-    // the days that actually carry rows in the bounded recent window.
+    // the days that actually carry rows in the bounded recent window - only
+    // for rows from a bounded config-tab (x._bounded), so an unbounded tab
+    // in the same source keeps its real stored range.
     const realRange = new Map();
-    if (this.boundDays) {
+    if (this.anyBounded) {
       for (const x of recent) {
+        if (!x._bounded) continue;
         if (!x.rowsToday) continue;
         const cur = realRange.get(x.tab) || { oldest: x.date, newest: x.date, dataDays: 0, newestRows: 0, newestBytes: 0, newestLastTime: null };
         if (x.date < cur.oldest) cur.oldest = x.date;
@@ -269,9 +289,19 @@ class HdbHealthReader extends CepReader {
         };
       });
 
-    const tables = this.tabs
+    let tables = this.tabs
       .flatMap((t) => latestOf((r[`latest_${t.name}`] || {}).rows, t.kind))
       .sort((a, b) => (b.rowsTotal || 0) - (a.rowsTotal || 0));
+
+    // per-source tab whitelist (config `only`) - drop rows for tables this
+    // source isn't meant to surface, in all three views
+    let monthlyOut = monthly;
+    let recentOut = recent;
+    if (this.only) {
+      tables = tables.filter((t) => this.only.has(t.tab));
+      monthlyOut = monthly.filter((m) => this.only.has(m.tab));
+      recentOut = recent.filter((x) => this.only.has(x.tab));
+    }
 
     const oldest = tables.map((t) => t.oldestDate).filter(Boolean).sort()[0] || null;
     const newest = tables.map((t) => t.newestDate).filter(Boolean).sort().slice(-1)[0] || null;
@@ -283,8 +313,8 @@ class HdbHealthReader extends CepReader {
       scanTs,
       cachedAt: new Date().toISOString(),
       tables,
-      monthly,
-      recent,
+      monthly: monthlyOut,
+      recent: recentOut,
       totals: {
         tables: tables.length,
         bar: tables.filter((t) => t.kind === "bar").length,
@@ -409,7 +439,7 @@ class HdbHealthManager {
     this.readers = new Map();
     this.meta = [];
     for (const s of cfg.sources) {
-      const opts = { host: s.host, port: s.port, timeoutMs: cfg.timeoutMs, tabs: s.tabs || null, boundDays: s.boundDays || null };
+      const opts = { host: s.host, port: s.port, timeoutMs: cfg.timeoutMs, tabs: s.tabs || null, boundDays: s.boundDays || null, only: s.only || null };
       this.readers.set(s.name, s.kind === "archive" ? new HdbHealthReader(opts) : new LiveHdbReader(opts));
       this.meta.push({ name: s.name, kind: s.kind, target: `${s.host}:${s.port}` });
     }

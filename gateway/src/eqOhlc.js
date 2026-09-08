@@ -8,16 +8,23 @@ const { QSession } = require("./qSession");
 // Asian equities - HKEX + Tokyo/Nikkei). Read-only; the HDB is loaded by a
 // separate loader, openQ never writes it.
 //
+// Also drives the eFX Charts page in the exact same shape: same reader
+// class, pointed at fx_hdb (cfg_proc/modules/fx/hdb.json, hdbroot
+// C:/data/db1/efx) for the `fx_m1_yfinance` table (1-minute spot bars, 28
+// G10 pairs from yfinance). Only the target/table and a couple of
+// error-message strings differ - see opts.hdbName / opts.startHint.
+//
 // Two calls:
-//   syms()          -> the ~6.4k symbol universe + its exchange, from the
+//   syms()          -> the symbol universe + its exchange, from the
 //                      newest partition (cached, symbol picker feeds off it)
 //   bars(sym, days) -> that symbol's minute bars over the last `days`
 //                      partitions, shaped { t, o, h, l, c, v } for the
 //                      dashboard's <LwCandles> (same shape as /api/ohlc)
 //
-// eq_hdb is not always running - start it from System > Control (the `eq`
-// module) or `scripts/startupAllByModule.sh eq`. Every call fails soft with
-// a 503 when it's down.
+// The HDB is not always running - for eq, start it from System > Control
+// (the `eq` module) or `scripts/startStop/startupAllByModule.sh eq`; for
+// fx, `scripts/startStop/startupAllByModule.sh fx`. Every call fails soft
+// with a 503 when it's down.
 
 // Yahoo tickers: digits + letters + '.' + '-' (e.g. 0005.HK, 7203.T,
 // BRK-B). qlit.symbolLit rejects the dot / leading digit, so the query
@@ -34,12 +41,14 @@ class EqOhlcReader {
   constructor(opts) {
     this.table = opts.table || "eq_m1_yfinance";
     this.maxDays = opts.maxDays || 21;
+    this.hdbName = opts.hdbName || "eq_hdb";
+    this.startHint = opts.startHint || 'the "eq" module from System > Control';
     this.session = new QSession({
       host: opts.host,
       port: opts.port,
       timeoutMs: opts.timeoutMs || 15000,
       reconnectMs: 2000,
-      label: "eq-hdb",
+      label: opts.label || "eq-hdb",
     });
     this._syms = { at: 0, data: null };
     // warm the symbol cache on (re)connect so /health symCount and the
@@ -64,7 +73,7 @@ class EqOhlcReader {
 
   _requireUp() {
     if (!this.session.connected) {
-      const e = new Error(`eq_hdb not reachable at ${this.session.target} - start the "eq" module from System > Control`);
+      const e = new Error(`${this.hdbName} not reachable at ${this.session.target} - start ${this.startHint}`);
       e.statusCode = 503;
       throw e;
     }

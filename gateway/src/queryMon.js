@@ -37,7 +37,7 @@ const SNAP = (nRecent, nSlow, winMin, histMin) => `
   series:0!select n:count i, avgMs:\`float\$avg took%1000000, errs:sum error
       by minute:(\`long\$0D00:01) xbar returned from done where returned > now - span histMin;
   (\`hasGw\`totalQueries\`queued\`doneCnt\`errCnt\`discardCnt\`winCnt\`winMin\`histMin,
-   \`p50Ms\`p95Ms\`p99Ms\`maxMs\`avgMs\`byType\`servers\`recent\`slowest\`series) ! (
+   \`p50Ms\`p95Ms\`p99Ms\`maxMs\`avgMs\`samplesMs\`byType\`servers\`recent\`slowest\`series) ! (
     1b;
     .util.gw.ID;
     count select from qq where null returned, not discard;
@@ -48,6 +48,7 @@ const SNAP = (nRecent, nSlow, winMin, histMin) => `
     winMin; histMin;
     prc[tk;0.5]; prc[tk;0.95]; prc[tk;0.99];
     \$[count tk; last tk; 0n]; \$[count tk; avg tk; 0n];
+    tk;
     byType; servers; recent; slowest; series)
  }[${nRecent};${nSlow};${winMin};${histMin}]`;
 
@@ -122,6 +123,10 @@ class QueryMonReader {
         p50: num(d.p50Ms), p95: num(d.p95Ms), p99: num(d.p99Ms),
         max: num(d.maxMs), avg: num(d.avgMs),
       },
+      // sorted latency sample vector (<=200 most-recent completed, ms) - lets
+      // the "all" view pool real percentiles across gateways instead of
+      // averaging per-gateway pXX
+      samplesMs: Array.from(d.samplesMs || []).map(Number).filter((x) => Number.isFinite(x)),
       qpsWindow: d.winCnt != null && d.winMin ? Number(d.winCnt) / (Number(d.winMin) * 60) : null,
       errRateWindow: d.winCnt ? Number(d.errCnt || 0) / Number(d.winCnt) : 0,
       byType: this._shapeRows(d.byType),

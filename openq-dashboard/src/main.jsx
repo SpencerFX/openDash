@@ -1612,7 +1612,9 @@ function HDBHealth() {
   const isLive = !!data?.live;
 
   const t = data?.totals || {};
-  const tabs = data?.tables || [];
+  // Per-table health rows, sorted alphabetically by table name (the gateway
+  // returns them rowsTotal-desc; only this table consumes `tabs`).
+  const tabs = [...(data?.tables || [])].sort((a, b) => (a.tab || "").localeCompare(b.tab || ""));
 
   // monthly series pivoted to { month, <tab>: value } for the recharts line chart
   const series = useMemo(() => {
@@ -2313,55 +2315,84 @@ function LwCandles({ bars, precision = 5, indicators, fitKey, markers, highlight
   );
 }
 
+// eFX > Charts — 1-minute candlesticks for fx_m1_yfinance (28 G10 spot
+// pairs from yfinance) read straight off fx_hdb via /api/fx/*. Same shape
+// as EQ > Charts: a day-count button row, a timeframe row resampled from
+// the raw 1m bars, and the shared <LwCandles> + indicators.
+const FX_DAYS = [1, 3, 5, 10, 21];
+const fxPricePrec = (v) => (Math.abs(Number(v) || 0) >= 20 ? 3 : 5); // JPY crosses ~150 -> 3dp, majors ~1.1 -> 5dp
 function Charts() {
-  const [sym,setSym] = useState("");
-  const [bucket,setBucket] = useState(15);
-  const [data,setData] = useState(null);
-  const [err,setErr] = useState(null);
-  const [auto,setAuto] = useState(true);
-  const [updated,setUpdated] = useState(null);
-  const [ind,setInd] = useState(() => {
+  const [syms, setSyms] = useState([]);            // ["AUDCAD", ...]
+  const [sym, setSym] = useState(() => { try { return localStorage.getItem("openq.charts.sym") || ""; } catch { return ""; } });
+  const [days, setDays] = useState(5);
+  const [tf, setTf] = useState(() => { try { return Number(localStorage.getItem("openq.charts.tf")) || 15; } catch { return 15; } });
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [symErr, setSymErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [ind, setInd] = useState(() => {
     try { const s = localStorage.getItem("openq.charts.ind"); if (s) return { ...IND_DEFAULT, ...JSON.parse(s) }; } catch { /* ignore */ }
     return IND_DEFAULT;
   });
   useEffect(() => { try { localStorage.setItem("openq.charts.ind", JSON.stringify(ind)); } catch { /* ignore */ } }, [ind]);
+  useEffect(() => { try { localStorage.setItem("openq.charts.tf", String(tf)); } catch { /* ignore */ } }, [tf]);
+  useEffect(() => { try { sym && localStorage.setItem("openq.charts.sym", sym); } catch { /* ignore */ } }, [sym]);
   const setIndKey = (k, patch) => setInd(v => ({ ...v, [k]: { ...v[k], ...patch } }));
 
+  const loadSyms = useCallback(() => {
+    fetch(new URL("/api/fx/syms", GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { const list = (j.syms || []).map(s => s.sym); setSyms(list); setSymErr(null); setSym(s => s || list[0] || ""); })
+      .catch(e => setSymErr(e.message));
+  }, []);
+  useEffect(() => { loadSyms(); }, [loadSyms]);
+
   const load = useCallback(() => {
-    const u = new URL("/api/ohlc", GW);
-    if (sym) u.searchParams.set("sym", sym);
-    u.searchParams.set("bucket", String(bucket));
-    u.searchParams.set("count", "90");
+    if (!sym) return;
+    const u = new URL("/api/fx/bars", GW);
+    u.searchParams.set("sym", sym);
+    u.searchParams.set("days", String(days));
     fetch(u, { cache: "no-store" })
-      .then(r => r.json().then(j => { if(!r.ok) throw new Error(j.error || r.statusText); return j; }))
-      .then(j => { setData(j); setErr(null); setUpdated(new Date()); if(!sym && j.sym) setSym(j.sym); })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
       .catch(e => setErr(e.message));
-  }, [sym, bucket]);
+  }, [sym, days]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     if (!auto) return;
-    const id = setInterval(load, 3000);
-    return () => clearInterval(id);
-  }, [auto, load]);
+    const id = setInterval(load, 30000);
+    const sid = setInterval(loadSyms, 60000);
+    return () => { clearInterval(id); clearInterval(sid); };
+  }, [auto, load, loadSyms]);
 
-  const nBars = (data?.bars || []).length;
-  const lo = data?.lo, hi = data?.hi;
+  const prec = fxPricePrec(data?.last);
   const chg = data?.changePct;
+  const nRaw = data?.bars?.length || 0;
+  const bars = useMemo(() => resampleBars(data?.bars || [], tf), [data, tf]);
+  const nBars = bars.length;
+  const tfLabel = EQ_TF.find(([, v]) => v === tf)?.[0] || "15m";
+  const tfLong = EQ_TF_LONG[tf] || `${tf}-minute`;
 
   return <div className="space-y-4">
     <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
-      <select value={sym} onChange={e=>setSym(e.target.value)}
-        className="rounded border border-slate-800 bg-slate-900 px-2 py-1 font-mono text-slate-200">
-        {(data?.syms || (sym ? [sym] : [])).map(s => <option key={s} value={s}>{s}</option>)}
+      <span className="text-slate-400">FX spot · <span className="text-slate-500">fx_m1_yfinance via fx_hdb</span></span>
+      <select value={sym} onChange={e => setSym(e.target.value)}
+        className="rounded border border-slate-800 bg-slate-900 px-2 py-1 font-mono text-slate-200 outline-none focus:border-cyan-500">
+        {(syms.length ? syms : (sym ? [sym] : [])).map(s => <option key={s} value={s}>{s}</option>)}
       </select>
-      <div className="flex overflow-hidden rounded border border-slate-800">
-        {OHLC_BUCKETS.map(([lab,sec]) => <button key={sec} onClick={()=>setBucket(sec)}
-          className={`px-2 py-1 ${bucket===sec ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{lab}</button>)}
-      </div>
-      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e=>setAuto(e.target.checked)}/> auto</label>
-      <button onClick={load} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {FX_DAYS.map(d => <button key={d} onClick={() => setDays(d)}
+          className={`px-2 py-1 ${days === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <span className="flex overflow-hidden rounded border border-slate-800" title="candle timeframe — resampled from the raw 1-minute bars">
+        {EQ_TF.map(([lab, v]) => <button key={v} onClick={() => setTf(v)}
+          className={`px-1.5 py-1 ${tf === v ? "bg-cyan-500 text-slate-950 font-semibold" : "text-slate-400 hover:bg-slate-900"}`}>{lab}</button>)}
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => { load(); loadSyms(); }} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
       <span className="ml-auto flex items-center gap-2 text-slate-600">
-        {data?.connected === false && <span className="text-amber-400">feed disconnected</span>}
+        {syms.length ? <span>{syms.length} pairs</span> : null}
         {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
         {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
       </span>
@@ -2382,22 +2413,24 @@ function Charts() {
       </div>
     </section>
 
-    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/ohlc — {err}
-      <div className="mt-1 text-rose-400/70">needs the markout module + feeder running and OPENQ_OHLC_STREAM set.</div></div>}
+    {symErr && <div className="rounded border border-amber-900 bg-amber-950/40 px-3 py-2 text-xs text-amber-300">{GW}/api/fx/syms — {symErr}
+      <div className="mt-1 text-amber-400/70">start the <span className="font-mono">fx</span> module: <span className="font-mono">scripts/startStop/startupAllByModule.sh fx</span></div></div>}
+    {err && !symErr && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/fx/bars — {err}</div>}
 
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      <Metric label="Last" value={data?.last != null ? data.last.toFixed(5) : "—"} delta={`${nBars} bars`} icon={CandlestickChart}/>
-      <Metric label="Change" value={chg == null ? "—" : `${chg >= 0 ? "+" : ""}${chg.toFixed(3)}%`} delta="over window" icon={chg >= 0 ? TrendingUp : TrendingDown}/>
-      <Metric label="High" value={hi != null ? hi.toFixed(5) : "—"} delta="session" icon={TrendingUp}/>
-      <Metric label="Low" value={lo != null ? lo.toFixed(5) : "—"} delta="session" icon={TrendingDown}/>
+      <Metric label="Last" value={data?.last != null ? data.last.toFixed(prec) : "—"} delta={`${nBars} ${tfLabel} bars · ${humanCount(nRaw)} 1m`} icon={CandlestickChart}/>
+      <Metric label="Change" value={chg == null ? "—" : `${chg >= 0 ? "+" : ""}${chg.toFixed(3)}%`} delta={`last ${data?.days ?? days} sessions`} icon={chg >= 0 ? TrendingUp : TrendingDown}/>
+      <Metric label="High" value={data?.hi != null ? data.hi.toFixed(prec) : "—"} delta="window" icon={TrendingUp}/>
+      <Metric label="Low" value={data?.lo != null ? data.lo.toFixed(prec) : "—"} delta="window" icon={TrendingDown}/>
     </div>
 
     <section className="panel p-4">
-      <div className="mb-3 flex justify-between">
-        <div className="font-semibold">{sym || "—"} <span className="text-xs text-slate-500">mid OHLC · {OHLC_BUCKETS.find(b=>b[1]===bucket)?.[0]} bars</span></div>
+      <div className="mb-3 flex items-baseline justify-between">
+        <div className="font-semibold">{sym || "—"} <span className="text-xs text-slate-500">{tfLong} OHLC{tf > 1 ? " · resampled from 1m" : ""}</span></div>
+        {data?.lo != null && <div className="text-xs text-slate-500">low {data.lo.toFixed(prec)}</div>}
       </div>
-      <LwCandles bars={data?.bars || []} precision={5} indicators={ind}/>
-      {data && !nBars && <div className="pt-4 text-center text-sm text-slate-500">no ticks buffered yet — the gateway accumulates from the live feed on startup</div>}
+      <LwCandles bars={bars} precision={prec} indicators={ind} fitKey={`${sym}|${tf}|${days}`}/>
+      {data && !nRaw && <div className="pt-4 text-center text-sm text-slate-500">no minute data for {sym} in the last {days} sessions</div>}
     </section>
   </div>;
 }
@@ -4094,17 +4127,21 @@ function tableStatus(t, sourceOnline, kind) {
 const TABLE_TIERS = {
   default: "Demo", markout: "Demo", primefinance: "Demo", spread: "Demo",
   mon: "Live", massive: "Live",
-  eq_m1_yfinance: "Live", eq_hdb: "Live", efxReplay: "Live",
+  eq_m1_yfinance: "Live", eq_hdb: "Live", efxReplay: "Live", fx_hdb: "Live",
+  fx_m1_yfinance: "Live", mon_hdb: "Live", primefinance_hdb: "Live", ta_hdb: "Live",
 };
 const TABLE_GROUPS = {
   eq_m1_yfinance: "yfinance", eq_hdb: "yfinance", efxReplay: "yfinance",
-  eq_m1_yfinance_idb: "yfinance",
+  eq_m1_yfinance_idb: "yfinance", fx_hdb: "yfinance",
+  fx_m1_yfinance: "yfinance", fx_m1_yfinance_idb: "yfinance",
 };
 // storage kind for a source when it's offline and /api/tables can't report `role`
 const TABLE_KIND = {
-  eq_hdb: "hdb", efxReplay: "hdb",
+  eq_hdb: "hdb", efxReplay: "hdb", fx_hdb: "hdb",
+  mon_hdb: "hdb", primefinance_hdb: "hdb", ta_hdb: "hdb",
   mon_idb: "idb", markout_idb: "idb", spread_idb: "idb",
   primefinance_idb: "idb", massive_idb: "idb", eq_m1_yfinance_idb: "idb",
+  fx_m1_yfinance_idb: "idb",
 };
 const TABLE_TIER_ORDER = [
   "Demo", "Live — Real-time", "Live — Real-time (IDB)", "Live — HDB", "Other",
@@ -4189,7 +4226,8 @@ function Tables() {
         return <tr key={src.name+"/"+t.table} className="border-t border-slate-800/60 hover:bg-slate-900/50">
           <td className="px-4 py-1.5 pl-12 font-mono text-cyan-300">{t.table}</td>
           <td className="px-4 py-1.5"><span className={`badge ${st.cls}`}>{st.label}</span></td>
-          <td className="px-4 py-1.5 tabular-nums text-slate-200">{t.rows?.toLocaleString() ?? "—"}</td>
+          <td className="px-4 py-1.5 tabular-nums text-slate-200">{t.rows?.toLocaleString() ?? "—"}
+            {t.boundDays ? <span className="ml-1 text-[10px] font-normal text-slate-500">last {t.boundDays}d</span> : null}</td>
           <td className="px-4 py-1.5 tabular-nums text-slate-500">{t.columns ?? "—"}</td>
           <td className="px-4 py-1.5 tabular-nums text-slate-400">{fmtBytes(t.bytes)}</td>
           <td className="px-4 py-1.5 text-slate-500">{ago(t.lastTs)}</td>
@@ -4278,24 +4316,109 @@ function Tables() {
 // ---- System > Query Mon ----------------------------------------------
 // Query behaviour off each gateway's .util.gw.queue / .util.gw.servers
 // (openQ core/utils/gateway.q). One tab per gateway target (gw0, mon_gw).
+// percentile off a pre-sorted ascending vector, same rule core/utils/gateway.q's
+// SNAP uses (index = floor(p * n), clamped)
+function qmPctl(sorted, p) {
+  if (!sorted || !sorted.length) return null;
+  return sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))];
+}
+
+// Synthetic "all" target: the union of every configured gateway's .util.gw.queue
+// stats. Counts sum; latency percentiles are pooled from the per-gateway sample
+// vectors (real, not an average of pXX); by-route / backend-handle / per-minute
+// rows are merged by key; recent & slowest are concatenated (each row tagged
+// with its gateway) and re-ranked.
+function qmBuildAll(targets) {
+  const anyConnected = targets.some(t => t.connected);
+  const gws = targets.filter(t => t.hasGw);
+  if (!gws.length) {
+    return { name: "all", target: `0 of ${targets.length} gateways`, connected: anyConnected, hasGw: false,
+      error: "none of the configured targets has a .util.gw.queue" };
+  }
+  const sum = k => gws.reduce((a, t) => a + (Number(t[k]) || 0), 0);
+  const winMin = gws[0].winMin, histMin = gws[0].histMin;
+  const winCnt = sum("winCnt"), errCnt = sum("errCnt");
+  const pooled = gws.flatMap(t => t.samplesMs || []).slice().sort((a, b) => a - b);
+
+  const btMap = new Map();
+  for (const t of gws) for (const r of t.byType || []) {
+    const key = Array.isArray(r.serverType) ? r.serverType.join("+") : String(r.serverType ?? "?");
+    const c = btMap.get(key) || { serverType: r.serverType, n: 0, errs: 0, _wavg: 0, maxMs: 0 };
+    c.n += Number(r.n) || 0; c.errs += Number(r.errs) || 0;
+    c._wavg += (Number(r.avgMs) || 0) * (Number(r.n) || 0);
+    c.maxMs = Math.max(c.maxMs, Number(r.maxMs) || 0);
+    btMap.set(key, c);
+  }
+  const byType = [...btMap.values()]
+    .map(c => ({ serverType: c.serverType, n: c.n, errs: c.errs, avgMs: c.n ? c._wavg / c.n : null, maxMs: c.maxMs }))
+    .sort((a, b) => b.n - a.n);
+
+  const svMap = new Map();
+  for (const t of gws) for (const s of t.servers || []) {
+    const key = String(s.serverType ?? "?");
+    const c = svMap.get(key) || { serverType: s.serverType, inuse: false, active: false, querycount: 0, usageMs: 0, lastAgoSec: null };
+    c.inuse = c.inuse || !!s.inuse; c.active = c.active || !!s.active;
+    c.querycount += Number(s.querycount) || 0; c.usageMs += Number(s.usageMs) || 0;
+    if (s.lastAgoSec != null) c.lastAgoSec = c.lastAgoSec == null ? s.lastAgoSec : Math.min(c.lastAgoSec, s.lastAgoSec);
+    svMap.set(key, c);
+  }
+
+  const tag = (arr, gw) => (arr || []).map(r => ({ ...r, _gw: gw }));
+  const recent = gws.flatMap(t => tag(t.recent, t.name)).sort((a, b) => (a.sinceSec ?? 1e12) - (b.sinceSec ?? 1e12)).slice(0, 40);
+  const slowest = gws.flatMap(t => tag(t.slowest, t.name)).sort((a, b) => (b.tookMs || 0) - (a.tookMs || 0)).slice(0, 15);
+
+  const seMap = new Map();
+  for (const t of gws) for (const s of t.series || []) {
+    const c = seMap.get(s.minute) || { minute: s.minute, n: 0, errs: 0, _wavg: 0 };
+    c.n += Number(s.n) || 0; c.errs += Number(s.errs) || 0;
+    c._wavg += (Number(s.avgMs) || 0) * (Number(s.n) || 0);
+    seMap.set(s.minute, c);
+  }
+  const series = [...seMap.values()].sort((a, b) => String(a.minute).localeCompare(String(b.minute)))
+    .map(c => ({ minute: c.minute, n: c.n, errs: c.errs, avgMs: c.n ? c._wavg / c.n : 0 }));
+
+  return {
+    name: "all",
+    target: `${gws.length} gateway${gws.length === 1 ? "" : "s"}`,
+    connected: anyConnected,
+    hasGw: true,
+    totalQueries: sum("totalQueries"), queued: sum("queued"), doneCnt: sum("doneCnt"),
+    errCnt, discardCnt: sum("discardCnt"), winCnt, winMin, histMin,
+    latencyMs: {
+      p50: qmPctl(pooled, 0.5), p95: qmPctl(pooled, 0.95), p99: qmPctl(pooled, 0.99),
+      max: pooled.length ? pooled[pooled.length - 1] : null,
+      avg: pooled.length ? pooled.reduce((a, b) => a + b, 0) / pooled.length : null,
+    },
+    qpsWindow: winMin ? winCnt / (winMin * 60) : null,
+    errRateWindow: winCnt ? errCnt / winCnt : 0,
+    byType, servers: [...svMap.values()], recent, slowest, series,
+  };
+}
+
 function QueryMon() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   const [auto, setAuto] = useState(true);
   const [updated, setUpdated] = useState(null);
-  const [tgt, setTgt] = useState("");
+  const [tgt, setTgt] = useState("all");
   const [showSlow, setShowSlow] = useState(false);
 
   const load = useCallback(() => {
     fetch(new URL("/api/querymon", GW), { cache: "no-store" })
       .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
-      .then(j => { setData(j); setErr(null); setUpdated(new Date()); setTgt(t => t || (j.targets[0] && j.targets[0].name) || ""); })
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
       .catch(e => setErr(e.message));
   }, []);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (!auto) return; const id = setInterval(load, 3000); return () => clearInterval(id); }, [auto, load]);
 
-  const targets = data?.targets || [];
+  // "all" (union of every gateway) + each gateway, all alpha-sorted (so "all"
+  // naturally lands first)
+  const targets = useMemo(() => {
+    const raw = data?.targets || [];
+    if (!raw.length) return [];
+    return [qmBuildAll(raw), ...raw].sort((a, b) => a.name.localeCompare(b.name));
+  }, [data]);
   const cur = targets.find(t => t.name === tgt) || targets[0];
 
   const ms = (v) => v == null ? "—" : v >= 1000 ? `${(v / 1000).toFixed(2)} s` : `${v.toFixed(v < 10 ? 2 : 0)} ms`;
@@ -4314,7 +4437,7 @@ function QueryMon() {
 
   return <div className="space-y-4">
     <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
-      <span className="text-slate-400">query behaviour · <span className="text-slate-500">.util.gw.queue per gateway</span></span>
+      <span className="text-slate-400">query behaviour · <span className="text-slate-500">.util.gw.queue{cur?.name === "all" ? ` · pooled across ${cur.target}` : " per gateway"}</span></span>
       <span className="flex overflow-hidden rounded border border-slate-800">
         {targets.map(t => <button key={t.name} onClick={() => setTgt(t.name)}
           className={`px-2 py-1 ${cur?.name === t.name ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>
@@ -4402,20 +4525,21 @@ function QueryMon() {
         </div>
         <div className="max-h-[48vh] overflow-auto">
           <table className="w-full text-left text-xs">
-            <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["#", "Age", "Route", "Table", "Latency", "Status"].map(h => <th key={h} className="px-4 py-2 font-medium">{h}</th>)}</tr></thead>
+            <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{[...(cur?.name === "all" ? ["#", "Age", "Gateway", "Route", "Table", "Latency", "Status"] : ["#", "Age", "Route", "Table", "Latency", "Status"])].map(h => <th key={h} className="px-4 py-2 font-medium">{h}</th>)}</tr></thead>
             <tbody>
               {rows.map((r, i) => {
                 const s = qStatus(r);
                 return <tr key={i} className={`border-t border-slate-800/60 ${r.error ? "bg-rose-950/20" : r.pending ? "bg-amber-950/10" : ""}`}>
                   <td className="px-4 py-1.5 tabular-nums text-slate-600">{r.queryID}</td>
                   <td className="px-4 py-1.5 tabular-nums text-slate-500">{secAgo(r.sinceSec)}</td>
+                  {cur?.name === "all" && <td className="px-4 py-1.5 font-mono text-slate-500">{r._gw || "—"}</td>}
                   <td className="px-4 py-1.5 font-mono text-slate-400">{route(r.serverType)}</td>
                   <td className="px-4 py-1.5 font-mono text-cyan-300">{r.qtable || "—"}</td>
                   <td className="px-4 py-1.5 tabular-nums text-slate-200">{r.pending ? "…" : ms(r.tookMs)}</td>
                   <td className="px-4 py-1.5"><span className={`badge ${s.cls}`}>{s.label}</span></td>
                 </tr>;
               })}
-              {!rows.length && <tr><td colSpan={6} className="px-4 py-4 text-center text-slate-600">no queries recorded</td></tr>}
+              {!rows.length && <tr><td colSpan={cur?.name === "all" ? 7 : 6} className="px-4 py-4 text-center text-slate-600">no queries recorded</td></tr>}
             </tbody>
           </table>
         </div>
@@ -5228,7 +5352,7 @@ function JobStatus() {
             <XAxis type="number" dataKey="t" domain={["dataMin", "dataMax"]} stroke="#566673" fontSize={10}
               tickFormatter={(v) => new Date(v).toLocaleDateString([], { month: "numeric", day: "numeric" })}/>
             <YAxis type="number" dataKey="secs" stroke="#566673" fontSize={10} tickFormatter={(v) => `${v}s`}/>
-            <Tooltip contentStyle={TT} cursor={{ strokeDasharray: "3 3" }}
+            <Tooltip contentStyle={TT} labelStyle={{ color: "#fff" }} itemStyle={{ color: "#fff" }} cursor={{ strokeDasharray: "3 3" }}
               formatter={(v, n) => (n === "secs" ? [`${Number(v).toFixed(2)}s`, "duration"] : [v, n])}
               labelFormatter={(v) => jobTs(v)}/>
             <Scatter data={trend} fillOpacity={0.85}>
@@ -5265,6 +5389,45 @@ function JobStatus() {
               <td className="px-3 py-1.5"><span className={`badge ${JOB_STATUS_BADGE[r.status] || JOB_STATUS_BADGE.UNKNOWN}`}>{r.status}</span></td>
             </tr>)}
             {data && !filtered.length && <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-600">{runs.length ? "no runs match the filter" : "no runs"}</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section className="panel overflow-hidden">
+      <div className="flex flex-wrap items-center gap-3 border-b border-slate-800 px-4 py-3">
+        <span className="font-semibold">EOD &amp; daily savedowns</span>
+        <span className="text-xs text-slate-500">{(data?.schedule || []).length} scheduled · last run / next run</span>
+      </div>
+      <div className="overflow-auto">
+        <table className="w-full text-left text-xs">
+          <thead className="bg-[#0a121a] text-slate-500"><tr>{["Job", "Last run", "Next run"].map((h) => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+          <tbody className="tabular-nums">
+            {(data?.schedule || []).map((r, i) => {
+              const dueMs = r.nextRun == null ? null : r.nextRun - Date.now();
+              return <tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+                <td className="px-3 py-1.5">
+                  <div className="font-semibold text-slate-200">{r.jobName}</div>
+                  <div className="text-[11px] text-slate-500">{r.schedule}{r.dayOffset ? ` · promotes .z.d${r.dayOffset > 0 ? "+" : ""}${r.dayOffset}` : ""}</div>
+                </td>
+                <td className="whitespace-nowrap px-3 py-1.5">
+                  {r.lastRun == null
+                    ? <span className="text-slate-600">no run in window</span>
+                    : <span className="flex items-center gap-1.5">
+                        {r.lastStatus && <span className={`badge ${JOB_STATUS_BADGE[r.lastStatus] || JOB_STATUS_BADGE.UNKNOWN}`}>{r.lastStatus}</span>}
+                        <span className="text-slate-300">{jobTs(r.lastRun)}</span>
+                      </span>}
+                </td>
+                <td className="whitespace-nowrap px-3 py-1.5">
+                  {r.nextRun == null
+                    ? <span className="text-slate-500">on demand</span>
+                    : <span className="text-slate-300">{jobTs(r.nextRun)}
+                        <span className="ml-1.5 text-slate-500">{dueMs != null && dueMs > 0 ? `in ${fmtDur(dueMs)}` : "due"}</span>
+                      </span>}
+                </td>
+              </tr>;
+            })}
+            {data && !(data.schedule || []).length && <tr><td colSpan={3} className="px-3 py-6 text-center text-slate-600">no EOD / daily savedown jobs found</td></tr>}
           </tbody>
         </table>
       </div>
