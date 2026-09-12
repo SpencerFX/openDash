@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  Activity, Archive, ArrowDown, ArrowUp, BarChart3, Bell, BookText, Boxes, CandlestickChart, Check,
-  ChevronRight, CircleDollarSign, Cpu, Database, FastForward, Flame, FlaskConical, Gauge, HardDrive, History, KeyRound, Landmark, LayoutDashboard,
-  Layers, Library, ListChecks, ListFilter, Lock, MemoryStick, Network, Pause, Play, Power, RefreshCw, Rocket,
-  Radar, RotateCw, ScrollText, Search, Settings, ShieldCheck, Square, Timer, Trash2, TrendingDown, TrendingUp,
-  Unlock, Wifi, X, Zap
+  Activity, Archive, ArrowDown, ArrowUp, BarChart3, Bell, BookText, Boxes, CalendarDays, CandlestickChart, Check,
+  ChevronLeft, ChevronRight, CircleDollarSign, Cpu, Crosshair, Database, FastForward, Flame, FlaskConical, Gauge, GitBranch, HardDrive, History, Hourglass, KeyRound, Landmark, LayoutDashboard,
+  Layers, Library, ListChecks, ListFilter, Lock, MemoryStick, Network, Pause, Play, Power, RefreshCw, RotateCcw, Rocket,
+  Radar, RotateCw, ScrollText, Scale, Search, Settings, ShieldCheck, Skull, SlidersHorizontal, Square, Timer, Trash2, TrendingDown, TrendingUp,
+  Unlock, Users, Wifi, X, Zap
 } from "lucide-react";
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, ZAxis, Tooltip, Legend, ReferenceLine, ResponsiveContainer, CartesianGrid, AreaChart, Area, ScatterChart, Scatter, Cell, Treemap, RadialBarChart, RadialBar, PolarAngleAxis, PolarGrid } from "recharts";
+import { LineChart, Line, BarChart, Bar, ComposedChart, XAxis, YAxis, ZAxis, Tooltip, Legend, ReferenceLine, ResponsiveContainer, CartesianGrid, AreaChart, Area, ScatterChart, Scatter, Cell, Treemap, RadialBarChart, RadialBar, PolarAngleAxis, PolarGrid, Radar as ReRadar, RadarChart, PolarRadiusAxis } from "recharts";
 import { createChart, createSeriesMarkers, CandlestickSeries, LineSeries, HistogramSeries, ColorType, CrosshairMode } from "lightweight-charts";
 import "./index.css";
 
@@ -33,10 +33,12 @@ const chart = Array.from({length: 24}, (_,i) => ({
 const NAV = [
   { kind: "item", name: "Overview", icon: LayoutDashboard },
   { kind: "group", name: "eFX", icon: Activity, children: [
-      ["Charts", CandlestickChart], ["Market Impact", BarChart3], ["Markout", TrendingUp], ["Spreads", TrendingDown], ["Backtest", FlaskConical] ] },
+      ["Charts", CandlestickChart], ["Market Impact", BarChart3], ["Markout", TrendingUp], ["Spreads", TrendingDown], ["Backtest", FlaskConical], ["Economic Calendar", CalendarDays] ] },
   { kind: "group", name: "EQ", icon: CircleDollarSign, children: [
       ["EQ Charts", CandlestickChart], ["Candles", Flame], ["Desk Risk", ShieldCheck], ["Prime Finance", CircleDollarSign],
       ["Fee Calibration", Gauge], ["Position Risk", Archive], ["Crowding", Boxes], ["Counterparty", Landmark] ] },
+  { kind: "group", name: "Broker", icon: Landmark, children: [
+      ["Broker Tech", Landmark], ["A/B Book", GitBranch], ["Toxic Analysis", Skull], ["Client Clusters", Users], ["Execution Quality", Crosshair] ] },
   { kind: "group", name: "Data", icon: Library, children: [
       ["Catalog", BookText], ["Explorer", Search] ] },
   { kind: "group", name: "SystemAdmin", icon: Settings, children: [
@@ -4339,6 +4341,7 @@ function qmBuildAll(targets) {
   const winMin = gws[0].winMin, histMin = gws[0].histMin;
   const winCnt = sum("winCnt"), errCnt = sum("errCnt");
   const pooled = gws.flatMap(t => t.samplesMs || []).slice().sort((a, b) => a - b);
+  const pooledWait = gws.flatMap(t => t.waitSamplesMs || []).slice().sort((a, b) => a - b);
 
   const btMap = new Map();
   for (const t of gws) for (const r of t.byType || []) {
@@ -4356,12 +4359,58 @@ function qmBuildAll(targets) {
   const svMap = new Map();
   for (const t of gws) for (const s of t.servers || []) {
     const key = String(s.serverType ?? "?");
-    const c = svMap.get(key) || { serverType: s.serverType, inuse: false, active: false, querycount: 0, usageMs: 0, lastAgoSec: null };
+    const c = svMap.get(key) || { serverType: s.serverType, inuse: false, active: false, querycount: 0, usageMs: 0, lastAgoSec: null, qpsWin: null, busyPct: null, _busyN: 0 };
     c.inuse = c.inuse || !!s.inuse; c.active = c.active || !!s.active;
     c.querycount += Number(s.querycount) || 0; c.usageMs += Number(s.usageMs) || 0;
+    if (s.qpsWin != null) c.qpsWin = (c.qpsWin || 0) + s.qpsWin;
+    if (s.busyPct != null) { c.busyPct = (c.busyPct || 0) + s.busyPct; c._busyN++; }
     if (s.lastAgoSec != null) c.lastAgoSec = c.lastAgoSec == null ? s.lastAgoSec : Math.min(c.lastAgoSec, s.lastAgoSec);
     svMap.set(key, c);
   }
+  for (const c of svMap.values()) if (c._busyN) c.busyPct = c.busyPct / c._busyN;
+
+  // active vs registered per serverType, pooled across gateways
+  const ssMap = new Map();
+  for (const t of gws) for (const r of t.srvSummary || []) {
+    const key = String(r.serverType ?? "?");
+    const c = ssMap.get(key) || { serverType: r.serverType, regd: 0, active: 0, inuse: 0 };
+    c.regd += Number(r.regd) || 0; c.active += Number(r.active) || 0; c.inuse += Number(r.inuse) || 0;
+    ssMap.set(key, c);
+  }
+
+  // error class breakdown, summed
+  const ecMap = new Map();
+  for (const t of gws) for (const r of t.errByClass || []) {
+    const key = String(r.errType ?? "?");
+    ecMap.set(key, (ecMap.get(key) || 0) + (Number(r.cnt) || 0));
+  }
+  const errByClass = [...ecMap.entries()].map(([errType, cnt]) => ({ errType, cnt })).sort((a, b) => b.cnt - a.cnt);
+
+  // single- vs fan-out-target split, merged
+  const foMap = new Map();
+  for (const t of gws) for (const r of t.fanoutSplit || []) {
+    const key = r.fanout ? "multi" : "single";
+    const c = foMap.get(key) || { fanout: !!r.fanout, n: 0, errs: 0, _wavg: 0, maxMs: 0 };
+    c.n += Number(r.n) || 0; c.errs += Number(r.errs) || 0;
+    c._wavg += (Number(r.avgMs) || 0) * (Number(r.n) || 0);
+    c.maxMs = Math.max(c.maxMs, Number(r.maxMs) || 0);
+    foMap.set(key, c);
+  }
+  const fanoutSplit = [...foMap.values()].map(c => ({ fanout: c.fanout, n: c.n, errs: c.errs, avgMs: c.n ? c._wavg / c.n : null, maxMs: c.maxMs }));
+
+  // per-client load: clientH is a per-gateway handle number, so keep rows
+  // distinct per gateway (tagged) rather than merging by clientH
+  const byClient = gws.flatMap(t => (t.byClient || []).map(r => ({ ...r, _gw: t.name })))
+    .sort((a, b) => (Number(b.n) || 0) - (Number(a.n) || 0)).slice(0, 12);
+
+  // backlog depth per minute = sum of each gateway's open-query depth
+  const blMap = new Map();
+  for (const t of gws) for (const r of t.backlog || []) {
+    const c = blMap.get(r.minute) || { minute: r.minute, depth: 0 };
+    c.depth += Number(r.depth) || 0;
+    blMap.set(r.minute, c);
+  }
+  const backlog = [...blMap.values()].sort((a, b) => String(a.minute).localeCompare(String(b.minute)));
 
   const tag = (arr, gw) => (arr || []).map(r => ({ ...r, _gw: gw }));
   const recent = gws.flatMap(t => tag(t.recent, t.name)).sort((a, b) => (a.sinceSec ?? 1e12) - (b.sinceSec ?? 1e12)).slice(0, 40);
@@ -4382,16 +4431,26 @@ function qmBuildAll(targets) {
     target: `${gws.length} gateway${gws.length === 1 ? "" : "s"}`,
     connected: anyConnected,
     hasGw: true,
-    totalQueries: sum("totalQueries"), queued: sum("queued"), doneCnt: sum("doneCnt"),
+    totalQueries: sum("totalQueries"), queued: sum("queued"),
+    waitingCnt: sum("waitingCnt"), dispatchedCnt: sum("dispatchedCnt"),
+    doneCnt: sum("doneCnt"),
     errCnt, discardCnt: sum("discardCnt"), winCnt, winMin, histMin,
+    hasErrType: gws.every(t => t.hasErrType),
     latencyMs: {
       p50: qmPctl(pooled, 0.5), p95: qmPctl(pooled, 0.95), p99: qmPctl(pooled, 0.99),
       max: pooled.length ? pooled[pooled.length - 1] : null,
       avg: pooled.length ? pooled.reduce((a, b) => a + b, 0) / pooled.length : null,
     },
+    waitMs: {
+      p50: qmPctl(pooledWait, 0.5), p95: qmPctl(pooledWait, 0.95), p99: qmPctl(pooledWait, 0.99),
+      max: pooledWait.length ? pooledWait[pooledWait.length - 1] : null,
+      avg: pooledWait.length ? pooledWait.reduce((a, b) => a + b, 0) / pooledWait.length : null,
+    },
     qpsWindow: winMin ? winCnt / (winMin * 60) : null,
     errRateWindow: winCnt ? errCnt / winCnt : 0,
-    byType, servers: [...svMap.values()], recent, slowest, series,
+    byType, servers: [...svMap.values()], srvSummary: [...ssMap.values()],
+    errByClass, fanoutSplit, byClient, backlog,
+    recent, slowest, series,
   };
 }
 
@@ -4429,11 +4488,25 @@ function QueryMon() {
     : r.error ? { label: "error", cls: "bg-rose-950 text-rose-300" }
     : { label: "ok", cls: "bg-emerald-950 text-emerald-300" };
 
-  const chartData = (cur?.series || []).map(s => ({
-    t: s.minute ? new Date(s.minute).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "",
-    n: s.n || 0, errs: s.errs || 0, avgMs: s.avgMs != null ? Number(s.avgMs.toFixed(2)) : 0,
-  }));
+  const hhmm = (m) => m ? new Date(m).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  // backlog carries the full minute axis; series only has minutes with a
+  // completion. Drive off backlog when present (new reader), else series.
+  const seByMin = new Map((cur?.series || []).map(s => [s.minute, s]));
+  const axis = (cur?.backlog || []).length ? cur.backlog : (cur?.series || []).map(s => ({ minute: s.minute, depth: null }));
+  const chartData = axis.map(b => {
+    const s = seByMin.get(b.minute) || {};
+    return {
+      t: hhmm(b.minute),
+      n: s.n || 0, errs: s.errs || 0,
+      avgMs: s.avgMs != null ? Number(s.avgMs.toFixed(2)) : 0,
+      depth: b.depth == null ? null : Number(b.depth),
+    };
+  });
+  const hasBacklog = (cur?.backlog || []).some(b => (b.depth || 0) > 0);
   const rows = (showSlow ? cur?.slowest : cur?.recent) || [];
+  const ec = cur?.errByClass || [];
+  const ecTotal = ec.reduce((a, r) => a + (Number(r.cnt) || 0), 0);
+  const ecCls = { timeout: "text-amber-300", backend: "text-rose-300", disconnect: "text-rose-400", join: "text-fuchsia-300", sizecap: "text-orange-300", execution: "text-rose-300" };
 
   return <div className="space-y-4">
     <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
@@ -4459,23 +4532,47 @@ function QueryMon() {
     {cur && cur.hasGw && <>
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
         <Metric label="Queries" value={fmtCount(cur.totalQueries)} delta={`${cur.doneCnt} completed`} icon={Radar}/>
-        <Metric label="In-flight" value={String(cur.queued ?? 0)} delta={`${cur.discardCnt || 0} discarded`} icon={Activity}/>
-        <Metric label="p95 latency" value={ms(cur.latencyMs?.p95)} delta={`p50 ${ms(cur.latencyMs?.p50)} · max ${ms(cur.latencyMs?.max)}`} icon={Gauge}/>
-        <Metric label={`Error rate (${cur.winMin}m)`} value={`${((cur.errRateWindow || 0) * 100).toFixed(1)}%`} delta={`${cur.errCnt || 0} err · ${(cur.qpsWindow || 0).toFixed(2)} q/s`} icon={cur.errCnt ? TrendingUp : TrendingDown}/>
+        <Metric label="In-flight" value={String(cur.queued ?? 0)} delta={`${cur.waitingCnt ?? 0} waiting · ${cur.dispatchedCnt ?? 0} dispatched`} icon={Activity}/>
+        <Metric label="p95 exec" value={ms(cur.latencyMs?.p95)} delta={`p50 ${ms(cur.latencyMs?.p50)} · max ${ms(cur.latencyMs?.max)}`} icon={Gauge}/>
+        <Metric label="p95 queue wait" value={ms(cur.waitMs?.p95)} delta={`p50 ${ms(cur.waitMs?.p50)} · max ${ms(cur.waitMs?.max)}`} icon={Hourglass}/>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-3">
+        <section className="panel p-4">
+          <div className="mb-1 text-xs font-semibold text-slate-300">Error rate <span className="font-normal text-slate-500">· {cur.winMin}m window</span></div>
+          <div className="flex items-baseline gap-2">
+            <span className={`text-2xl font-semibold tabular-nums ${cur.errCnt ? "text-rose-300" : "text-slate-200"}`}>{((cur.errRateWindow || 0) * 100).toFixed(1)}%</span>
+            <span className="text-xs text-slate-500">{cur.errCnt || 0} err · {(cur.qpsWindow || 0).toFixed(2)} q/s</span>
+          </div>
+        </section>
+        <section className="panel p-4 lg:col-span-2">
+          <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-300">
+            Errors by class <span className="font-normal text-slate-500">· {cur.hasErrType ? ".util.gw.queue.errType" : "heuristic — gateway pre-errType"}</span>
+          </div>
+          {ecTotal ? <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
+            {ec.map((r, i) => <span key={i} className="tabular-nums">
+              <span className={`font-mono ${ecCls[r.errType] || "text-slate-300"}`}>{r.errType}</span>
+              <span className="ml-1.5 text-slate-200">{r.cnt}</span>
+              <span className="ml-1 text-slate-600">({((r.cnt / ecTotal) * 100).toFixed(0)}%)</span>
+            </span>)}
+          </div> : <div className="text-xs text-slate-500">no errors recorded</div>}
+        </section>
       </div>
 
       <section className="panel p-4">
-        <div className="mb-2 font-semibold">Throughput <span className="text-xs text-slate-500">queries &amp; errors per minute · last {cur.histMin}m</span></div>
+        <div className="mb-2 font-semibold">Throughput <span className="text-xs text-slate-500">queries &amp; errors per minute{hasBacklog ? " · backlog depth (line)" : ""} · last {cur.histMin}m</span></div>
         <div className="h-52"><ResponsiveContainer width="100%" height="100%">
-          <BarChart data={chartData} margin={{ top: 6, right: 8, bottom: 4, left: 0 }}>
+          <ComposedChart data={chartData} margin={{ top: 6, right: 8, bottom: 4, left: 0 }}>
             <CartesianGrid stroke="#1e2b36" vertical={false}/>
             <XAxis dataKey="t" stroke="#566673" fontSize={10} minTickGap={28}/>
-            <YAxis stroke="#566673" fontSize={10} width={34} allowDecimals={false}/>
+            <YAxis yAxisId="l" stroke="#566673" fontSize={10} width={34} allowDecimals={false}/>
+            <YAxis yAxisId="r" orientation="right" stroke="#7c8794" fontSize={10} width={30} allowDecimals={false}/>
             <Tooltip contentStyle={{ background: "#0b151e", border: "1px solid #263746", fontSize: 12 }}
-              formatter={(v, k) => [v, k === "avgMs" ? "avg ms" : k]}/>
-            <Bar dataKey="n" name="queries" fill="#22d3ee" isAnimationActive={false} stackId="a"/>
-            <Bar dataKey="errs" name="errors" fill="#f43f5e" isAnimationActive={false} stackId="a"/>
-          </BarChart>
+              formatter={(v, k) => [v, k === "avgMs" ? "avg ms" : k === "depth" ? "backlog" : k]}/>
+            <Bar yAxisId="l" dataKey="n" name="queries" fill="#22d3ee" isAnimationActive={false} stackId="a"/>
+            <Bar yAxisId="l" dataKey="errs" name="errors" fill="#f43f5e" isAnimationActive={false} stackId="a"/>
+            <Line yAxisId="r" type="monotone" dataKey="depth" name="backlog" stroke="#eab308" strokeWidth={1.5} dot={false} connectNulls isAnimationActive={false}/>
+          </ComposedChart>
         </ResponsiveContainer></div>
         {!chartData.length && <div className="pt-2 text-center text-xs text-slate-500">no completed queries in the window yet</div>}
       </section>
@@ -4499,18 +4596,66 @@ function QueryMon() {
         </section>
 
         <section className="panel overflow-hidden">
-          <div className="border-b border-slate-800 px-4 py-2 font-semibold">Backend handles <span className="ml-1 text-xs font-normal text-slate-500">.util.gw.servers</span></div>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-slate-800 px-4 py-2">
+            <span className="font-semibold">Backend handles</span>
+            <span className="text-xs font-normal text-slate-500">.util.gw.servers</span>
+            <span className="ml-auto flex gap-2 text-xs tabular-nums">
+              {(cur.srvSummary || []).map((r, i) => <span key={i} className={r.active < r.regd ? "text-amber-300" : "text-slate-400"}>
+                <span className="font-mono">{String(r.serverType)}</span> {r.active}/{r.regd}
+              </span>)}
+            </span>
+          </div>
           <table className="w-full text-left text-xs">
-            <thead className="bg-[#0a121a] text-slate-500"><tr>{["Type", "State", "Queries", "Busy time", "Last"].map(h => <th key={h} className="px-4 py-2 font-medium">{h}</th>)}</tr></thead>
+            <thead className="bg-[#0a121a] text-slate-500"><tr>{["Type", "State", "Queries", `q/s (${cur.winMin}m)`, "Busy%", "Busy time", "Last"].map(h => <th key={h} className="px-4 py-2 font-medium">{h}</th>)}</tr></thead>
             <tbody>
               {(cur.servers || []).map((s, i) => <tr key={i} className="border-t border-slate-800">
                 <td className="px-4 py-1.5 font-mono text-slate-300">{s.serverType}</td>
                 <td className="px-4 py-1.5"><span className="flex items-center gap-1.5"><Dot up={s.active}/>{s.inuse ? "in use" : s.active ? "idle" : "down"}</span></td>
                 <td className="px-4 py-1.5 tabular-nums text-slate-200">{fmtCount(s.querycount)}</td>
+                <td className="px-4 py-1.5 tabular-nums text-slate-400">{s.qpsWin == null ? "—" : s.qpsWin.toFixed(2)}</td>
+                <td className={`px-4 py-1.5 tabular-nums ${s.busyPct > 0.8 ? "text-amber-300" : "text-slate-400"}`}>{s.busyPct == null ? "—" : `${(s.busyPct * 100).toFixed(0)}%`}</td>
                 <td className="px-4 py-1.5 tabular-nums text-slate-400">{ms(s.usageMs)}</td>
                 <td className="px-4 py-1.5 tabular-nums text-slate-500">{secAgo(s.lastAgoSec)} ago</td>
               </tr>)}
-              {!(cur.servers || []).length && <tr><td colSpan={5} className="px-4 py-3 text-center text-slate-600">no backends</td></tr>}
+              {!(cur.servers || []).length && <tr><td colSpan={7} className="px-4 py-3 text-center text-slate-600">no backends</td></tr>}
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <section className="panel overflow-hidden">
+          <div className="border-b border-slate-800 px-4 py-2 font-semibold">By client <span className="ml-1 text-xs font-normal text-slate-500">clientH · who is driving load</span></div>
+          <table className="w-full text-left text-xs">
+            <thead className="bg-[#0a121a] text-slate-500"><tr>{[...(cur?.name === "all" ? ["Gateway", "Client"] : ["Client"]), "Queries", "In-flight", "Errors", "Avg", "Last"].map(h => <th key={h} className="px-4 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody>
+              {(cur.byClient || []).map((r, i) => <tr key={i} className="border-t border-slate-800">
+                {cur?.name === "all" && <td className="px-4 py-1.5 font-mono text-slate-500">{r._gw || "—"}</td>}
+                <td className="px-4 py-1.5 font-mono text-slate-300">{r.clientH}</td>
+                <td className="px-4 py-1.5 tabular-nums text-slate-200">{fmtCount(r.n)}</td>
+                <td className="px-4 py-1.5 tabular-nums text-slate-400">{r.inflight || 0}</td>
+                <td className={`px-4 py-1.5 tabular-nums ${r.errs ? "text-rose-400" : "text-slate-500"}`}>{r.errs || 0}</td>
+                <td className="px-4 py-1.5 tabular-nums text-slate-400">{ms(r.avgMs)}</td>
+                <td className="px-4 py-1.5 tabular-nums text-slate-500">{secAgo(r.lastAgoSec)} ago</td>
+              </tr>)}
+              {!(cur.byClient || []).length && <tr><td colSpan={cur?.name === "all" ? 7 : 6} className="px-4 py-3 text-center text-slate-600">no clients recorded</td></tr>}
+            </tbody>
+          </table>
+        </section>
+
+        <section className="panel overflow-hidden">
+          <div className="border-b border-slate-800 px-4 py-2 font-semibold">Single vs fan-out <span className="ml-1 text-xs font-normal text-slate-500">multi-target queries join across backends</span></div>
+          <table className="w-full text-left text-xs">
+            <thead className="bg-[#0a121a] text-slate-500"><tr>{["Shape", "Queries", "Avg", "Max", "Errors"].map(h => <th key={h} className="px-4 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody>
+              {(cur.fanoutSplit || []).slice().sort((a, b) => Number(a.fanout) - Number(b.fanout)).map((r, i) => <tr key={i} className="border-t border-slate-800">
+                <td className="px-4 py-1.5 text-slate-300">{r.fanout ? "fan-out (≥2)" : "single-target"}</td>
+                <td className="px-4 py-1.5 tabular-nums text-slate-200">{fmtCount(r.n)}</td>
+                <td className="px-4 py-1.5 tabular-nums text-slate-400">{ms(r.avgMs)}</td>
+                <td className="px-4 py-1.5 tabular-nums text-slate-400">{ms(r.maxMs)}</td>
+                <td className={`px-4 py-1.5 tabular-nums ${r.errs ? "text-rose-400" : "text-slate-500"}`}>{r.errs || 0}</td>
+              </tr>)}
+              {!(cur.fanoutSplit || []).length && <tr><td colSpan={5} className="px-4 py-3 text-center text-slate-600">no completed queries</td></tr>}
             </tbody>
           </table>
         </section>
@@ -5545,6 +5690,1617 @@ function SimplePage({title,subtitle,icon:Icon}) {
   return <div className="panel flex min-h-[520px] flex-col items-center justify-center p-8 text-center"><Icon size={42} className="mb-4 text-cyan-400"/><div className="text-xl font-semibold">{title}</div><div className="mt-2 max-w-md text-sm text-slate-500">{subtitle}</div><button className="mt-6 flex items-center gap-2 rounded bg-cyan-400 px-4 py-2 text-sm font-semibold text-slate-950"><Play size={14}/> Connect to openQ</button></div>
 }
 
+// ---- Broker Tech (retail FX/CFD brokerage & risk analytics) ---------
+// /api/brokertech -> modules/analytics/brokerTech/brokerTech.q's `.brk.*`
+// suite over brokerTech_hdb (C:/data/retail). Figures are in the dataset's
+// own account currency, uncorrected (no FX feed) - hence "acct ccy".
+const BT_TOX_BADGE = {
+  LOW: "bg-emerald-950 text-emerald-300", MEDIUM: "bg-cyan-950 text-cyan-300",
+  HIGH: "bg-amber-950 text-amber-300", EXTREME: "bg-rose-950 text-rose-300",
+  UNKNOWN: "bg-slate-800 text-slate-400",
+};
+const BT_ROUTE_BADGE = { A: "bg-cyan-950 text-cyan-300", B: "bg-emerald-950 text-emerald-300", SPLIT: "bg-amber-950 text-amber-300" };
+const BT_SEV_BADGE = { HIGH: "bg-rose-950 text-rose-300", MEDIUM: "bg-amber-950 text-amber-300", LOW: "bg-slate-800 text-slate-400" };
+const BT_TOX_COMPONENTS = [
+  { key: "scalpScore", label: "scalp" }, { key: "martingaleScore", label: "martingale" },
+  { key: "oneSidedScore", label: "one-sided" }, { key: "burstScore", label: "burst" },
+  { key: "tooGoodScore", label: "too-good" },
+];
+const bkPct = (v, d = 1) => (v == null || !isFinite(v) ? "—" : `${v.toFixed(d)}%`);
+const bkNum = (v, d = 2) => (v == null || !isFinite(v) ? "—" : v.toFixed(d));
+
+function BrokerTech() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookback, setLookback] = useState(90);
+  const [perfView, setPerfView] = useState("losers"); // losers = best for a B-book
+
+  const load = useCallback((lb) => {
+    fetch(new URL(`/api/brokertech?lookbackDays=${lb}`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(lookback); }, [load, lookback]);
+  useEffect(() => { if (!auto) return; const id = setInterval(() => load(lookback), 20000); return () => clearInterval(id); }, [auto, load, lookback]);
+
+  const m = data?.meta || {};
+  const sm = data?.summary || {};
+  const opt = data?.optimise || {};
+  const bc = data?.bookConcentration || {};
+  const feeRev = (sm.commissionRev || 0) + (sm.swapRev || 0);
+
+  // revenue by instrument: merge best + worst, keep the 12 biggest |totalRev|
+  const revRows = useMemo(() => {
+    const seen = new Set(); const out = [];
+    for (const r of [...(data?.revByInstrument?.best || []), ...(data?.revByInstrument?.worst || [])]) {
+      if (seen.has(r.symbol)) continue; seen.add(r.symbol); out.push(r);
+    }
+    return out.sort((a, b) => Math.abs(b.totalRev || 0) - Math.abs(a.totalRev || 0)).slice(0, 12)
+      .map(r => ({ symbol: r.symbol, totalRev: r.totalRev, bBookPnl: r.bBookPnl, fees: (r.commissionRev || 0) + (r.swapRev || 0) }));
+  }, [data]);
+
+  const routeSplit = (data?.routing || []).map(r => ({
+    label: r.route, value: r.nProviders,
+    color: r.route === "A" ? "#22d3ee" : r.route === "B" ? "#34d399" : "#f59e0b",
+    display: `${r.nProviders} · ${fmtUsd(r.expectedRev, { plus: true })}`,
+  }));
+  const perfRows = perfView === "winners" ? (data?.profitability?.winners || []) : (data?.profitability?.losers || []);
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">retail brokerage &amp; risk · <span className="text-slate-500">brokerTech_hdb (C:/data/retail) · MetaTrader Signals copy-trading · figures in acct ccy</span></span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[30, 90, 180, 365].map(d => <button key={d} onClick={() => setLookback(d)}
+          className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(lookback)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {m.sDate && <span className="tabular-nums">{m.sDate} → {m.eDate}</span>}
+        {data && <span className="text-slate-500">{fmtCount(m.nTradeRows)} trades · {m.nActive} active / {fmtCount(m.nSignals)} providers</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/brokertech — {err}
+      <div className="mt-1 text-rose-400/70">needs brokerTech_hdb (startupAllByModule.sh brokerTech) with modules/analytics/brokerTech/brokerTech.q in its hdb.json libraries, and OPENQ_BROKERTECH_HDB set.</div></div>}
+
+    {data && <>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label="B-book total rev" value={fmtUsd(sm.bBookTotalRev, { plus: true })} icon={CircleDollarSign}
+          sub="market PnL + commission + swap if all internalised"
+          tone={(sm.bBookTotalRev ?? 0) >= 0 ? "pos" : "warn"} accent={(sm.bBookTotalRev ?? 0) >= 0 ? "#34d399" : "#f43f5e"}/>
+        <StatTile label="Client net P&L" value={fmtUsd(sm.clientNetProfit, { plus: true })} icon={sm.clientNetProfit > 0 ? TrendingUp : TrendingDown}
+          sub={`${fmtCount(sm.nTrades)} trades · ${bkNum(sm.totalLots, 0)} lots`}
+          tone={(sm.clientNetProfit ?? 0) > 0 ? "warn" : "pos"}/>
+        <StatTile label="Fee revenue" value={fmtUsd(feeRev)} icon={Gauge}
+          sub={`comm ${fmtUsd(sm.commissionRev)} · swap ${fmtUsd(sm.swapRev)}`} accent="#22d3ee"/>
+        <StatTile label="Active providers" value={String(m.nActive ?? "—")} icon={ListFilter}
+          sub={`${fmtCount(sm.nOrders)} orders · ${fmtCount(sm.nCancelled)} cancelled`}
+          bar={sm.nOrders ? { pct: 100 * (sm.nCancelled || 0) / sm.nOrders, color: "#f59e0b" } : null}/>
+      </div>
+
+      <section className="panel p-4">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+          <div className="font-semibold">A/B-book routing optimisation <span className="text-xs font-normal text-slate-500">.brk.book.recommend + .brk.book.optimise</span></div>
+          <div className="text-xs tabular-nums text-slate-400">
+            all-B <span className={pnlTone(opt.allBBookRev)}>{fmtUsd(opt.allBBookRev, { plus: true })}</span>
+            <span className="mx-2 text-slate-700">|</span>
+            all-A <span className={pnlTone(opt.allABookRev)}>{fmtUsd(opt.allABookRev, { plus: true })}</span>
+            <span className="mx-2 text-slate-700">|</span>
+            recommended <span className="font-semibold text-cyan-300">{fmtUsd(opt.recommendedRev, { plus: true })}</span>
+            <span className="ml-2 rounded bg-emerald-950 px-1.5 py-0.5 text-emerald-300">+{fmtUsd(opt.upliftVsBestExtreme)} uplift</span>
+          </div>
+        </div>
+        <SplitBar segments={routeSplit} height={10} showLegend/>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3">
+          {(data.routing || []).map(r => <div key={r.route} className="rounded border border-slate-800 bg-slate-950/40 p-2.5">
+            <div className="flex items-center justify-between"><span className={`badge ${BT_ROUTE_BADGE[r.route] || "bg-slate-800"}`}>{r.route}</span>
+              <span className="tabular-nums text-xs text-slate-400">{r.nProviders} providers</span></div>
+            <div className="mt-1.5 tabular-nums text-sm font-semibold text-slate-200">{fmtUsd(r.expectedRev, { plus: true })}</div>
+            <div className="mt-0.5 text-[11px] text-slate-500">{r.rationale}</div>
+          </div>)}
+        </div>
+      </section>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Revenue by instrument <span className="text-xs font-normal text-slate-500">total rev = B-book PnL + fees · acct ccy</span></div>
+          <div className="h-64"><ResponsiveContainer width="100%" height="100%">
+            <BarChart data={revRows} layout="vertical" margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36" horizontal={false}/>
+              <XAxis type="number" stroke="#566673" fontSize={10} tickFormatter={(v) => fmtUsd(v)}/>
+              <YAxis type="category" dataKey="symbol" stroke="#566673" fontSize={10} width={72}/>
+              <Tooltip contentStyle={TT} formatter={(v) => fmtUsd(v, { plus: true })}/>
+              <ReferenceLine x={0} stroke="#37505f"/>
+              <Bar dataKey="totalRev" name="total rev" isAnimationActive={false}>
+                {revRows.map((r, i) => <Cell key={i} fill={(r.totalRev || 0) >= 0 ? "#34d399" : "#f43f5e"}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer></div>
+          <div className="mt-1 text-[10px] text-slate-600">green = the desk earns internalising this symbol; red = clients win it (a B-book leak)</div>
+        </section>
+
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Book concentration <span className="text-xs font-normal text-slate-500">.brk.expo.bookConcentration + peak concurrent</span></div>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs tabular-nums">
+            <span className="text-slate-500">symbol HHI</span><span className="text-slate-200">{bkNum(bc.symbolHHI, 3)}</span>
+            <span className="text-slate-500">signal HHI</span><span className="text-slate-200">{bkNum(bc.signalHHI, 3)}</span>
+            <span className="text-slate-500">top-1 / top-5 symbol</span><span className="text-slate-200">{bkPct(bc.top1SymbolPct)} / {bkPct(bc.top5SymbolPct)}</span>
+            <span className="text-slate-500">top-1 / top-5 signal</span><span className="text-slate-200">{bkPct(bc.top1SignalPct)} / {bkPct(bc.top5SignalPct)}</span>
+            <span className="text-slate-500">instruments / accounts</span><span className="text-slate-200">{bc.nSymbols} / {bc.nSignals}</span>
+          </div>
+          <div className="mt-3 border-t border-slate-800 pt-2">
+            <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">peak concurrent open lots</div>
+            <table className="w-full text-left text-xs tabular-nums">
+              <tbody>
+                {(data.peakConcurrent || []).slice(0, 6).map((r, i) => <tr key={i} className="border-t border-slate-800/50">
+                  <td className="py-1 font-mono text-slate-300">{r.symbol}</td>
+                  <td className="py-1 text-slate-200">{bkNum(r.peakConcurrentLots, 2)}</td>
+                  <td className="py-1 text-slate-600">{r.peakAt ? new Date(r.peakAt).toISOString().slice(0, 16).replace("T", " ") : "—"}</td>
+                </tr>)}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <section className="panel overflow-hidden">
+        <div className="flex items-center justify-between border-b border-slate-800 px-4 py-2">
+          <div className="font-semibold">Profitability leaderboard <span className="text-xs font-normal text-slate-500">per provider · minTrades ≥ {m.minTrades}</span></div>
+          <span className="flex overflow-hidden rounded border border-slate-800 text-xs">
+            <button onClick={() => setPerfView("losers")} className={`px-2 py-1 ${perfView === "losers" ? "bg-slate-800 text-emerald-300" : "text-slate-400 hover:bg-slate-900"}`}>client losers (best B-book)</button>
+            <button onClick={() => setPerfView("winners")} className={`px-2 py-1 ${perfView === "winners" ? "bg-slate-800 text-amber-300" : "text-slate-400 hover:bg-slate-900"}`}>client winners (hedge)</button>
+          </span>
+        </div>
+        <div className="max-h-[44vh] overflow-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Provider", "Trades", "Win%", "PF", "Expectancy", "Net P&L", "Lots", "Hold (min)", "<5m%", "Trades/day"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody className="tabular-nums">
+              {perfRows.map((r, i) => <tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+                <td className="px-3 py-1.5 text-slate-200"><span className="font-mono text-slate-500">{r.signalId}</span> {r.name}</td>
+                <td className="px-3 py-1.5 text-slate-400">{fmtCount(r.nTrades)}</td>
+                <td className="px-3 py-1.5 text-slate-300">{bkPct(r.winRatePct, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-300">{bkNum(r.profitFactor)}</td>
+                <td className={`px-3 py-1.5 ${pnlTone(r.expectancy)}`}>{bkNum(r.expectancy)}</td>
+                <td className={`px-3 py-1.5 font-semibold ${pnlTone(r.netProfit)}`}>{fmtUsd(r.netProfit, { plus: true })}</td>
+                <td className="px-3 py-1.5 text-slate-400">{bkNum(r.totalLots, 1)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkNum(r.avgHoldMin, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkPct(r.sub5MinPct, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkNum(r.tradesPerDay, 1)}</td>
+              </tr>)}
+              {!perfRows.length && <tr><td colSpan={10} className="px-3 py-8 text-center text-slate-600">no providers meet minTrades in this window</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <section className="panel overflow-hidden">
+          <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 px-4 py-2">
+            <span className="font-semibold">Toxicity ranking</span>
+            <span className="text-xs font-normal text-slate-500">.brk.tox.score · 5 components → composite</span>
+            <span className="ml-auto flex gap-1.5">
+              {(data.toxBuckets || []).map(b => <span key={b.bucket} className={`badge ${BT_TOX_BADGE[b.bucket] || "bg-slate-800"}`}>{b.bucket} {b.nProviders}</span>)}
+            </span>
+          </div>
+          <div className="max-h-[42vh] overflow-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Provider", "Win%", "MaxDD%", "Components", "Tox", ""].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+              <tbody className="tabular-nums">
+                {(data.toxicity || []).map((r, i) => <tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+                  <td className="px-3 py-1.5 text-slate-200"><span className="font-mono text-slate-500">{r.signalId}</span> {r.name}</td>
+                  <td className="px-3 py-1.5 text-slate-400">{bkPct(r.winRatePct, 0)}</td>
+                  <td className={`px-3 py-1.5 ${pnlTone(r.maxDDPct)}`}>{bkNum(r.maxDDPct, 0)}</td>
+                  <td className="px-3 py-1.5">
+                    <div className="flex items-end gap-0.5" title={BT_TOX_COMPONENTS.map(c => `${c.label} ${bkNum(r[c.key])}`).join(" · ")}>
+                      {BT_TOX_COMPONENTS.map(c => <span key={c.key} className="w-2 rounded-t bg-slate-800" style={{ height: `${4 + 18 * Math.max(0, Math.min(1, r[c.key] || 0))}px`, background: riskColor(r[c.key]) }}/>)}
+                    </div>
+                  </td>
+                  <td className="px-3 py-1.5 font-semibold" style={{ color: riskColor(r.toxScore) }}>{bkNum(r.toxScore)}</td>
+                  <td className="px-3 py-1.5"><span className={`badge ${BT_TOX_BADGE[r.bucket] || "bg-slate-800"}`}>{r.bucket}</span></td>
+                </tr>)}
+                {!(data.toxicity || []).length && <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-600">no providers scored</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="panel overflow-hidden">
+          <div className="border-b border-slate-800 px-4 py-2 font-semibold">Drawdown risk <span className="text-xs font-normal text-slate-500">from intraday equity curve · nPts ≥ 30</span></div>
+          <div className="max-h-[42vh] overflow-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Provider", "Pts", "Net ret%", "Max DD%", "Cur DD%", "Underwater%", "Recovery"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+              <tbody className="tabular-nums">
+                {(data.drawdown || []).map((r, i) => <tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+                  <td className="px-3 py-1.5 text-slate-200"><span className="font-mono text-slate-500">{r.signalId}</span> {r.name}</td>
+                  <td className="px-3 py-1.5 text-slate-500">{r.nPts}</td>
+                  <td className={`px-3 py-1.5 ${pnlTone(r.netReturnPct)}`}>{bkNum(r.netReturnPct, 0)}</td>
+                  <td className="px-3 py-1.5 font-semibold text-rose-400">{bkNum(r.maxDDPct, 0)}</td>
+                  <td className={`px-3 py-1.5 ${pnlTone(r.curDDPct)}`}>{bkNum(r.curDDPct, 0)}</td>
+                  <td className="px-3 py-1.5 text-slate-400">{bkPct(r.underwaterSamplePct, 0)}</td>
+                  <td className="px-3 py-1.5 text-slate-500">{bkNum(r.recoveryFactor)}</td>
+                </tr>)}
+                {!(data.drawdown || []).length && <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-600">no equity curves with ≥ 30 points</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <section className="panel overflow-hidden">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 px-4 py-2">
+          <span className="font-semibold">Risk-threshold breach alerts</span>
+          <span className="text-xs font-normal text-slate-500">.brk.alert.breaches</span>
+          <span className="ml-auto flex flex-wrap gap-1.5">
+            {(data.alertsByKind || []).map((k, i) => <span key={i} className={`badge ${BT_SEV_BADGE[k.severity] || "bg-slate-800"}`}>{k.kind} {k.nBreaches}</span>)}
+            {!(data.alertsByKind || []).length && <span className="badge bg-emerald-950 text-emerald-300">no breaches</span>}
+          </span>
+        </div>
+        {(data.alerts || []).length > 0 && <div className="max-h-[36vh] overflow-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Provider", "Kind", "Severity", "Metric", "Value", "Threshold", "Message"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody className="tabular-nums">
+              {(data.alerts || []).map((r, i) => <tr key={i} className="border-t border-slate-800/60">
+                <td className="px-3 py-1.5 text-slate-200"><span className="font-mono text-slate-500">{r.signalId}</span> {r.name}</td>
+                <td className="px-3 py-1.5 text-slate-300">{r.kind}</td>
+                <td className="px-3 py-1.5"><span className={`badge ${BT_SEV_BADGE[r.severity] || "bg-slate-800"}`}>{r.severity}</span></td>
+                <td className="px-3 py-1.5 font-mono text-slate-500">{r.metric}</td>
+                <td className="px-3 py-1.5 text-rose-300">{bkNum(r.obsValue)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkNum(r.threshold)}</td>
+                <td className="px-3 py-1.5 text-slate-400">{r.message}</td>
+              </tr>)}
+            </tbody>
+          </table>
+        </div>}
+      </section>
+
+      <section className="panel overflow-hidden">
+        <div className="border-b border-slate-800 px-4 py-2 font-semibold">Broker scorecard <span className="text-xs font-normal text-slate-500">.brk.broker.* · broker parsed from provider name · UNKNOWN = undisclosed</span></div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-left text-xs">
+            <thead className="bg-[#0a121a] text-slate-500"><tr>{["Broker", "Providers", "Trades", "Lots", "Client P&L", "Total rev", "Win%", "PF", "Cancel%", "Avg MaxDD%", "Avg tox", "Route A/B/S", "Rec rev"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody className="tabular-nums">
+              {(data.brokerScorecard || []).map((r, i) => <tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+                <td className="px-3 py-1.5 font-medium text-slate-200">{r.brokerTag}</td>
+                <td className="px-3 py-1.5 text-slate-400">{r.nProviders}</td>
+                <td className="px-3 py-1.5 text-slate-400">{fmtCount(r.nTrades)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkNum(r.totalLots, 0)}</td>
+                <td className={`px-3 py-1.5 ${pnlTone(r.clientNetProfit)}`}>{fmtUsd(r.clientNetProfit, { plus: true })}</td>
+                <td className={`px-3 py-1.5 font-semibold ${pnlTone(r.totalRev)}`}>{fmtUsd(r.totalRev, { plus: true })}</td>
+                <td className="px-3 py-1.5 text-slate-400">{bkPct(r.winRatePct, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-400">{bkNum(r.profitFactor)}</td>
+                <td className="px-3 py-1.5 text-slate-400">{bkPct(r.cancelRatePct, 0)}</td>
+                <td className={`px-3 py-1.5 ${pnlTone(r.avgMaxDDPct)}`}>{bkNum(r.avgMaxDDPct, 0)}</td>
+                <td className="px-3 py-1.5" style={{ color: riskColor(r.avgToxScore) }}>{bkNum(r.avgToxScore)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{r.nRouteA}/{r.nRouteB}/{r.nRouteSplit}</td>
+                <td className="px-3 py-1.5 text-cyan-300">{fmtUsd(r.recommendedRev, { plus: true })}</td>
+              </tr>)}
+              {!(data.brokerScorecard || []).length && <tr><td colSpan={13} className="px-3 py-8 text-center text-slate-600">no brokers resolved</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading brokerTech analytics…</div>}
+  </div>;
+}
+
+// ---- A/B Book (routing deep-dive + interactive policy simulator) -----
+// Same /api/brokertech feed as Broker Tech, but built entirely around
+// .brk.book.* - the full per-signal routingDetail (every active provider,
+// not just topN) plus the desk's actual current thresholds, so a slider
+// change can re-derive .brk.book.recommend's route decision client-side
+// (same formula, see brokerTech.q's .brk.book.recommend) without another
+// q round-trip, and show the revenue impact live.
+function abSimRoute(r, thr) {
+  const tox = r.toxScore ?? 0, cnp = r.clientNetProfit ?? 0, lots = r.totalLots ?? 0;
+  if (tox >= thr.toxHighThreshold) return { route: "A", rationale: "high toxicity - pass through, do not warehouse" };
+  if (cnp > thr.profitableClientUsd) return { route: "A", rationale: "consistently profitable client - hedge to LP" };
+  if (lots > thr.largeSizeLots) return { route: "SPLIT", rationale: "large size - partial hedge" };
+  return { route: "B", rationale: "losing/neutral non-toxic flow - internalise" };
+}
+function abExpectedRev(r, route, hedgeFrac) {
+  if (route === "A") return r.aBookRev ?? 0;
+  if (route === "B") return r.bBookTotalRev ?? 0;
+  return hedgeFrac * (r.aBookRev ?? 0) + (1 - hedgeFrac) * (r.bBookTotalRev ?? 0);
+}
+const AB_ROUTE_TABS = ["All", "A", "B", "SPLIT"];
+
+function ABBook() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookback, setLookback] = useState(90);
+  const [thr, setThr] = useState(null); // { toxHighThreshold, profitableClientUsd, largeSizeLots, splitHedgeFrac }
+  const [routeTab, setRouteTab] = useState("All");
+  const [changedOnly, setChangedOnly] = useState(false);
+  const [q, setQ] = useState("");
+  const initedThr = useRef(false);
+
+  const load = useCallback((lb) => {
+    fetch(new URL(`/api/brokertech?lookbackDays=${lb}`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(lookback); }, [load, lookback]);
+  useEffect(() => { if (!auto) return; const id = setInterval(() => load(lookback), 20000); return () => clearInterval(id); }, [auto, load, lookback]);
+  // seed the simulator from the desk's real .brk.cfg thresholds exactly once
+  // (a poll refresh must not stomp on sliders the user is dragging)
+  useEffect(() => {
+    if (data?.thresholds && !initedThr.current) { setThr(data.thresholds); initedThr.current = true; }
+  }, [data]);
+
+  const m = data?.meta || {};
+  const opt = data?.optimise || {};
+  const deskThr = data?.thresholds || null;
+  const rows = data?.routingDetail || [];
+  const isCustom = !!(thr && deskThr && (
+    thr.toxHighThreshold !== deskThr.toxHighThreshold || thr.profitableClientUsd !== deskThr.profitableClientUsd ||
+    thr.largeSizeLots !== deskThr.largeSizeLots || thr.splitHedgeFrac !== deskThr.splitHedgeFrac));
+
+  // re-derive every provider's route under the current slider policy - the
+  // heart of the page. Cheap: a few hundred rows, pure arithmetic.
+  const sim = useMemo(() => {
+    if (!thr || !rows.length) return { rows: [], allB: 0, allA: 0, rec: 0, nA: 0, nB: 0, nSplit: 0, nChanged: 0 };
+    let allB = 0, allA = 0, rec = 0, nA = 0, nB = 0, nSplit = 0, nChanged = 0;
+    const out = rows.map(r => {
+      const { route, rationale } = abSimRoute(r, thr);
+      const expectedRev = abExpectedRev(r, route, thr.splitHedgeFrac);
+      allB += r.bBookTotalRev ?? 0; allA += r.aBookRev ?? 0; rec += expectedRev;
+      if (route === "A") nA++; else if (route === "B") nB++; else nSplit++;
+      const changed = route !== r.route;
+      if (changed) nChanged++;
+      return { ...r, simRoute: route, simRationale: rationale, simExpectedRev: expectedRev, changed };
+    });
+    return { rows: out, allB, allA, rec, nA, nB, nSplit, nChanged };
+  }, [rows, thr]);
+
+  const filteredRows = useMemo(() => {
+    let out = sim.rows;
+    if (routeTab !== "All") out = out.filter(r => r.simRoute === routeTab);
+    if (changedOnly) out = out.filter(r => r.changed);
+    if (q.trim()) { const needle = q.trim().toLowerCase(); out = out.filter(r => (r.name || "").toLowerCase().includes(needle) || (r.brokerTag || "").toLowerCase().includes(needle)); }
+    return [...out].sort((a, b) => Math.abs(b.simExpectedRev || 0) - Math.abs(a.simExpectedRev || 0));
+  }, [sim.rows, routeTab, changedOnly, q]);
+
+  const bestExtreme = Math.max(sim.allB, sim.allA);
+  const revChart = [
+    { label: "All B-book", value: opt.allBBookRev, fill: "#34d399" },
+    { label: "All A-book", value: opt.allABookRev, fill: "#22d3ee" },
+    { label: "Desk policy", value: opt.recommendedRev, fill: "#a78bfa" },
+    { label: "Your policy", value: sim.rec, fill: "#f59e0b" },
+  ];
+  const deskSplit = [
+    { label: "A", value: opt.nRouteA || 0, color: "#22d3ee" },
+    { label: "B", value: opt.nRouteB || 0, color: "#34d399" },
+    { label: "SPLIT", value: opt.nRouteSplit || 0, color: "#f59e0b" },
+  ];
+  const yourSplit = [
+    { label: "A", value: sim.nA, color: "#22d3ee" },
+    { label: "B", value: sim.nB, color: "#34d399" },
+    { label: "SPLIT", value: sim.nSplit, color: "#f59e0b" },
+  ];
+  const brokerRouting = data?.brokerRouting || [];
+
+  const Slider = ({ label, valueLabel, k, min, max, step }) => <div>
+    <div className="flex items-center justify-between text-xs"><span className="text-slate-400">{label}</span><span className="tabular-nums text-slate-200">{valueLabel}</span></div>
+    <input type="range" min={min} max={max} step={step} value={thr ? thr[k] : min}
+      onChange={e => setThr(t => ({ ...t, [k]: Number(e.target.value) }))}
+      className="mt-1 w-full accent-cyan-400"/>
+  </div>;
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">A/B-book routing deep-dive · <span className="text-slate-500">.brk.book.* over brokerTech_hdb (C:/data/retail) · figures in acct ccy</span></span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[30, 90, 180, 365].map(d => <button key={d} onClick={() => setLookback(d)}
+          className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(lookback)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {m.sDate && <span className="tabular-nums">{m.sDate} → {m.eDate}</span>}
+        {data && <span className="text-slate-500">{fmtCount(rows.length)} active providers</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/brokertech — {err}
+      <div className="mt-1 text-rose-400/70">needs brokerTech_hdb (startupAllByModule.sh brokerTech) with modules/analytics/brokerTech/brokerTech.q in its hdb.json libraries, and OPENQ_BROKERTECH_HDB set.</div></div>}
+
+    {data && thr && <>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label="All B-book (internalise all)" value={fmtUsd(opt.allBBookRev, { plus: true })} icon={Scale}
+          sub="every provider warehoused - market PnL + fees" accent="#34d399"/>
+        <StatTile label="All A-book (hedge all)" value={fmtUsd(opt.allABookRev, { plus: true })} icon={Scale}
+          sub="every provider passed to an LP - fees only" accent="#22d3ee"/>
+        <StatTile label="Desk policy" value={fmtUsd(opt.recommendedRev, { plus: true })} icon={GitBranch}
+          sub={`+${fmtUsd(opt.upliftVsBestExtreme)} vs best extreme · current .brk.cfg`} accent="#a78bfa"/>
+        <StatTile label="Your policy (simulated)" value={fmtUsd(sim.rec, { plus: true })} icon={SlidersHorizontal}
+          sub={`${fmtUsd(sim.rec - bestExtreme, { plus: true })} vs best extreme · ${sim.nChanged} providers flip vs desk`}
+          tone={sim.rec >= opt.recommendedRev ? "pos" : "warn"} accent="#f59e0b"/>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-[1.1fr_1fr]">
+        <section className="panel p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="font-semibold">Routing policy simulator <span className="text-xs font-normal text-slate-500">re-derives .brk.book.recommend client-side</span></div>
+            <div className="flex items-center gap-2">
+              <span className={`badge ${isCustom ? "bg-amber-950 text-amber-300" : "bg-emerald-950 text-emerald-300"}`}>{isCustom ? "custom policy" : "desk policy"}</span>
+              <button onClick={() => deskThr && setThr(deskThr)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-xs text-slate-300 hover:bg-slate-900"><RotateCcw size={12}/> reset</button>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Slider label="Toxicity threshold → A-book" k="toxHighThreshold" min={0} max={1} step={0.01} valueLabel={bkNum(thr.toxHighThreshold, 2)}/>
+            <Slider label="Profitable-client threshold → A-book" k="profitableClientUsd" min={-2000} max={5000} step={50} valueLabel={fmtUsd(thr.profitableClientUsd, { plus: true })}/>
+            <Slider label="Large-size threshold → SPLIT" k="largeSizeLots" min={0} max={300} step={5} valueLabel={`${bkNum(thr.largeSizeLots, 0)} lots`}/>
+            <Slider label="SPLIT hedge fraction" k="splitHedgeFrac" min={0} max={1} step={0.05} valueLabel={bkPct(thr.splitHedgeFrac * 100, 0)}/>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-4 border-t border-slate-800 pt-3">
+            <div>
+              <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">desk policy split ({opt.nSignals} providers)</div>
+              <SplitBar segments={deskSplit} height={10} showLegend/>
+            </div>
+            <div>
+              <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">your policy split ({rows.length} providers)</div>
+              <SplitBar segments={yourSplit} height={10} showLegend/>
+            </div>
+          </div>
+        </section>
+
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Revenue by policy <span className="text-xs font-normal text-slate-500">acct ccy, window total</span></div>
+          <div className="h-56"><ResponsiveContainer width="100%" height="100%">
+            <BarChart data={revChart} margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36" vertical={false}/>
+              <XAxis dataKey="label" stroke="#566673" fontSize={10}/>
+              <YAxis stroke="#566673" fontSize={10} tickFormatter={(v) => fmtUsd(v)}/>
+              <Tooltip contentStyle={TT} formatter={(v) => fmtUsd(v, { plus: true })}/>
+              <ReferenceLine y={0} stroke="#37505f"/>
+              <Bar dataKey="value" isAnimationActive={false}>
+                {revChart.map((r, i) => <Cell key={i} fill={r.fill}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer></div>
+          <div className="mt-1 text-[10px] text-slate-600">"Your policy" moves live as the sliders change; the other three are fixed window totals from the server</div>
+        </section>
+      </div>
+
+      <section className="panel overflow-hidden">
+        <div className="border-b border-slate-800 px-4 py-2 font-semibold">Routing economics by broker <span className="text-xs font-normal text-slate-500">.brk.broker.routing · desk policy · broker parsed from provider name</span></div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[640px] text-left text-xs">
+            <thead className="bg-[#0a121a] text-slate-500"><tr>{["Broker", "Providers", "Route A/B/S", "Lots", "All-B", "All-A", "Recommended", "Uplift"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody className="tabular-nums">
+              {brokerRouting.map((r, i) => <tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+                <td className="px-3 py-1.5 font-medium text-slate-200">{r.brokerTag}</td>
+                <td className="px-3 py-1.5 text-slate-400">{r.nProviders}</td>
+                <td className="px-3 py-1.5 text-slate-500">{r.nRouteA}/{r.nRouteB}/{r.nRouteSplit}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkNum(r.totalLots, 0)}</td>
+                <td className={`px-3 py-1.5 ${pnlTone(r.allBBookRev)}`}>{fmtUsd(r.allBBookRev, { plus: true })}</td>
+                <td className={`px-3 py-1.5 ${pnlTone(r.allABookRev)}`}>{fmtUsd(r.allABookRev, { plus: true })}</td>
+                <td className="px-3 py-1.5 font-semibold text-cyan-300">{fmtUsd(r.recommendedRev, { plus: true })}</td>
+                <td className="px-3 py-1.5 text-emerald-400">+{fmtUsd(r.upliftVsBestExtreme)}</td>
+              </tr>)}
+              {!brokerRouting.length && <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-600">no brokers resolved</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel overflow-hidden">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 px-4 py-2">
+          <span className="font-semibold">Per-signal routing detail</span>
+          <span className="text-xs font-normal text-slate-500">every active provider · route recomputed live under your policy</span>
+          <span className="ml-2 flex overflow-hidden rounded border border-slate-800 text-xs">
+            {AB_ROUTE_TABS.map(t => <button key={t} onClick={() => setRouteTab(t)}
+              className={`px-2 py-1 ${routeTab === t ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{t}</button>)}
+          </span>
+          <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={changedOnly} onChange={e => setChangedOnly(e.target.checked)}/> changed vs desk only ({sim.nChanged})</label>
+          <span className="relative ml-auto">
+            <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-600"/>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="search provider / broker"
+              className="rounded border border-slate-800 bg-slate-950/60 py-1 pl-6 pr-2 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-cyan-700"/>
+          </span>
+        </div>
+        <div className="max-h-[56vh] overflow-auto">
+          <table className="w-full min-w-[980px] text-left text-xs">
+            <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Provider", "Broker", "Trades", "Tox", "Client P&L", "B-book mkt PnL", "Fees", "Lots", "Desk route", "Your route", "Expected rev", "Rationale"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody className="tabular-nums">
+              {filteredRows.map((r, i) => <tr key={i} className={`border-t border-slate-800/60 hover:bg-slate-900/50 ${r.changed ? "bg-amber-950/10" : ""}`}>
+                <td className="px-3 py-1.5 text-slate-200"><span className="font-mono text-slate-500">{r.signalId}</span> {r.name}</td>
+                <td className="px-3 py-1.5 text-slate-400">{r.brokerTag}</td>
+                <td className="px-3 py-1.5 text-slate-400">{fmtCount(r.nTrades)}</td>
+                <td className="px-3 py-1.5" style={{ color: riskColor(r.toxScore) }}>{bkNum(r.toxScore)} <span className={`badge ${BT_TOX_BADGE[r.bucket] || "bg-slate-800"}`}>{r.bucket}</span></td>
+                <td className={`px-3 py-1.5 ${pnlTone(r.clientNetProfit)}`}>{fmtUsd(r.clientNetProfit, { plus: true })}</td>
+                <td className={`px-3 py-1.5 ${pnlTone(r.bBookMarketPnl)}`}>{fmtUsd(r.bBookMarketPnl, { plus: true })}</td>
+                <td className="px-3 py-1.5 text-slate-400">{fmtUsd((r.commissionRev || 0) + (r.swapRev || 0))}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkNum(r.totalLots, 1)}</td>
+                <td className="px-3 py-1.5"><span className={`badge ${BT_ROUTE_BADGE[r.route] || "bg-slate-800"}`}>{r.route}</span></td>
+                <td className="px-3 py-1.5">
+                  <span className={`badge ${BT_ROUTE_BADGE[r.simRoute] || "bg-slate-800"}`}>{r.simRoute}</span>
+                  {r.changed && <span className="ml-1 text-[10px] text-amber-400">changed</span>}
+                </td>
+                <td className={`px-3 py-1.5 font-semibold ${pnlTone(r.simExpectedRev)}`}>{fmtUsd(r.simExpectedRev, { plus: true })}</td>
+                <td className="px-3 py-1.5 text-slate-500">{r.simRationale}</td>
+              </tr>)}
+              {!filteredRows.length && <tr><td colSpan={12} className="px-3 py-8 text-center text-slate-600">no providers match this filter</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading A/B routing analytics…</div>}
+  </div>;
+}
+
+// ---- Toxic Analysis (abusive/toxic-trader detection deep-dive) -------
+// Same /api/brokertech feed, built around .brk.tox.* - the full per-signal
+// toxDetail (every active provider, not just topN) plus the desk's actual
+// .brk.cfg weights/bucket-thresholds, so a slider change can re-derive
+// .brk.tox.score's composite formula and .brk.tox.bucket's classification
+// client-side (see brokerTech.q) and show the revenue-at-risk impact live -
+// the same what-if pattern as the A/B Book page, applied to the toxicity
+// formula instead of the routing formula.
+const TOX_BUCKET_COLOR = { LOW: "#34d399", MEDIUM: "#22d3ee", HIGH: "#f59e0b", EXTREME: "#f43f5e", UNKNOWN: "#64748b" };
+const TOX_BUCKET_ORDER = ["LOW", "MEDIUM", "HIGH", "EXTREME"];
+const TOX_TABS = ["All", ...TOX_BUCKET_ORDER];
+function txSimScore(r, w) {
+  return (w.wScalp * (r.scalpScore ?? 0)) + (w.wMartingale * (r.martingaleScore ?? 0))
+    + (w.wOneSided * (r.oneSidedScore ?? 0)) + (w.wBurst * (r.burstScore ?? 0)) + (w.wTooGood * (r.tooGoodScore ?? 0));
+}
+function txSimBucket(score, w) {
+  if (score >= w.toxExtreme) return "EXTREME";
+  if (score >= w.toxHigh) return "HIGH";
+  if (score >= w.toxMed) return "MEDIUM";
+  return "LOW";
+}
+const AT_RISK = new Set(["HIGH", "EXTREME"]);
+
+function ToxicAnalysis() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookback, setLookback] = useState(90);
+  const [wt, setWt] = useState(null); // { wScalp..wTooGood, toxMed, toxHigh, toxExtreme }
+  const [bucketTab, setBucketTab] = useState("All");
+  const [changedOnly, setChangedOnly] = useState(false);
+  const [q, setQ] = useState("");
+  const initedWt = useRef(false);
+
+  const load = useCallback((lb) => {
+    fetch(new URL(`/api/brokertech?lookbackDays=${lb}`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(lookback); }, [load, lookback]);
+  useEffect(() => { if (!auto) return; const id = setInterval(() => load(lookback), 20000); return () => clearInterval(id); }, [auto, load, lookback]);
+  useEffect(() => {
+    if (data?.toxCfg && !initedWt.current) { setWt(data.toxCfg); initedWt.current = true; }
+  }, [data]);
+
+  const m = data?.meta || {};
+  const deskCfg = data?.toxCfg || null;
+  const rows = data?.toxDetail || [];
+  const isCustom = !!(wt && deskCfg && Object.keys(deskCfg).some(k => wt[k] !== deskCfg[k]));
+
+  // re-derive every provider's composite score + bucket under the current
+  // slider formula. Cheap: a few hundred rows, pure arithmetic.
+  const sim = useMemo(() => {
+    if (!wt || !rows.length) return { rows: [], byBucket: {}, atRiskRev: 0, nChanged: 0, avgScore: 0, maxScore: 0 };
+    const byBucket = { LOW: 0, MEDIUM: 0, HIGH: 0, EXTREME: 0 };
+    let atRiskRev = 0, nChanged = 0, sumScore = 0, maxScore = 0;
+    const out = rows.map(r => {
+      const simScore = txSimScore(r, wt);
+      const simBucket = txSimBucket(simScore, wt);
+      byBucket[simBucket] = (byBucket[simBucket] || 0) + 1;
+      if (AT_RISK.has(simBucket)) atRiskRev += r.bBookTotalRev ?? 0;
+      const changed = simBucket !== r.bucket;
+      if (changed) nChanged++;
+      sumScore += simScore; maxScore = Math.max(maxScore, simScore);
+      return { ...r, simScore, simBucket, changed };
+    });
+    return { rows: out, byBucket, atRiskRev, nChanged, avgScore: sumScore / out.length, maxScore };
+  }, [rows, wt]);
+
+  const deskAtRiskRev = useMemo(() => rows.reduce((a, r) => a + (AT_RISK.has(r.bucket) ? (r.bBookTotalRev ?? 0) : 0), 0), [rows]);
+  const totalBookRev = useMemo(() => rows.reduce((a, r) => a + (r.bBookTotalRev ?? 0), 0), [rows]);
+  const deskSplit = TOX_BUCKET_ORDER.map(b => ({ label: b, value: rows.filter(r => r.bucket === b).length, color: TOX_BUCKET_COLOR[b] }));
+  const yourSplit = TOX_BUCKET_ORDER.map(b => ({ label: b, value: sim.byBucket[b] || 0, color: TOX_BUCKET_COLOR[b] }));
+  const toxAlerts = (data?.alerts || []).filter(a => a.kind === "TOXICITY");
+  const toxAlertCount = (data?.alertsByKind || []).filter(k => k.kind === "TOXICITY").reduce((a, k) => a + (k.nBreaches || 0), 0);
+
+  const histogram = useMemo(() => {
+    const bins = Array.from({ length: 10 }, (_, i) => ({ bin: `${(i / 10).toFixed(1)}–${((i + 1) / 10).toFixed(1)}`, mid: (i + 0.5) / 10, count: 0 }));
+    for (const r of sim.rows) { const i = Math.min(9, Math.max(0, Math.floor((r.simScore || 0) * 10))); bins[i].count++; }
+    return bins;
+  }, [sim.rows]);
+
+  const radarData = useMemo(() => {
+    const axes = [
+      { key: "scalpScore", label: "Scalp" }, { key: "martingaleScore", label: "Martingale" },
+      { key: "oneSidedScore", label: "One-sided" }, { key: "burstScore", label: "Burst" }, { key: "tooGoodScore", label: "Too-good" },
+    ];
+    const byB = Object.fromEntries((data?.toxBucketProfile || []).map(b => [b.bucket, b]));
+    return { axes: axes.map(a => { const row = { axis: a.label }; for (const b of TOX_BUCKET_ORDER) row[b] = byB[b] ? byB[b][a.key] : null; return row; }), present: TOX_BUCKET_ORDER.filter(b => byB[b]) };
+  }, [data]);
+
+  const filteredRows = useMemo(() => {
+    let out = sim.rows;
+    if (bucketTab !== "All") out = out.filter(r => r.simBucket === bucketTab);
+    if (changedOnly) out = out.filter(r => r.changed);
+    if (q.trim()) { const needle = q.trim().toLowerCase(); out = out.filter(r => (r.name || "").toLowerCase().includes(needle) || (r.brokerTag || "").toLowerCase().includes(needle)); }
+    return [...out].sort((a, b) => (b.simScore || 0) - (a.simScore || 0));
+  }, [sim.rows, bucketTab, changedOnly, q]);
+
+  const Slider = ({ label, valueLabel, k, min, max, step }) => <div>
+    <div className="flex items-center justify-between text-xs"><span className="text-slate-400">{label}</span><span className="tabular-nums text-slate-200">{valueLabel}</span></div>
+    <input type="range" min={min} max={max} step={step} value={wt ? wt[k] : min}
+      onChange={e => setWt(t => ({ ...t, [k]: Number(e.target.value) }))}
+      className="mt-1 w-full accent-rose-400"/>
+  </div>;
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">toxic / abusive-trader analysis · <span className="text-slate-500">.brk.tox.* over brokerTech_hdb (C:/data/retail) · figures in acct ccy</span></span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[30, 90, 180, 365].map(d => <button key={d} onClick={() => setLookback(d)}
+          className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(lookback)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {m.sDate && <span className="tabular-nums">{m.sDate} → {m.eDate}</span>}
+        {data && <span className="text-slate-500">{fmtCount(rows.length)} active providers</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/brokertech — {err}
+      <div className="mt-1 text-rose-400/70">needs brokerTech_hdb (startupAllByModule.sh brokerTech) with modules/analytics/brokerTech/brokerTech.q in its hdb.json libraries, and OPENQ_BROKERTECH_HDB set.</div></div>}
+
+    {data && wt && <>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label="Revenue at risk (desk)" value={fmtUsd(deskAtRiskRev, { plus: true })} icon={Skull}
+          sub={`HIGH+EXTREME · ${totalBookRev ? bkPct(100 * deskAtRiskRev / totalBookRev, 0) : "—"} of book rev`}
+          tone={deskAtRiskRev >= 0 ? "warn" : "pos"} accent="#f43f5e"/>
+        <StatTile label="Revenue at risk (yours)" value={fmtUsd(sim.atRiskRev, { plus: true })} icon={SlidersHorizontal}
+          sub={`${sim.nChanged} providers reclassified vs desk`}
+          tone={sim.atRiskRev >= deskAtRiskRev ? "warn" : "pos"} accent="#f59e0b"/>
+        <StatTile label="Composite tox score" value={bkNum(sim.maxScore)} icon={Gauge}
+          sub={`max · avg ${bkNum(sim.avgScore)} across ${rows.length} providers`} accent="#a78bfa"/>
+        <StatTile label="Toxicity breaches" value={String(toxAlertCount)} icon={Bell}
+          sub=".brk.alert.breaches · kind=TOXICITY" tone={toxAlertCount ? "warn" : "pos"}/>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-[1.15fr_1fr]">
+        <section className="panel p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="font-semibold">Toxicity formula simulator <span className="text-xs font-normal text-slate-500">re-derives .brk.tox.score + .brk.tox.bucket client-side</span></div>
+            <div className="flex items-center gap-2">
+              <span className={`badge ${isCustom ? "bg-amber-950 text-amber-300" : "bg-emerald-950 text-emerald-300"}`}>{isCustom ? "custom formula" : "desk formula"}</span>
+              <button onClick={() => deskCfg && setWt(deskCfg)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-xs text-slate-300 hover:bg-slate-900"><RotateCcw size={12}/> reset</button>
+            </div>
+          </div>
+          <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">component weights</div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Slider label="Scalp weight" k="wScalp" min={0} max={1} step={0.01} valueLabel={bkNum(wt.wScalp, 2)}/>
+            <Slider label="Martingale weight" k="wMartingale" min={0} max={1} step={0.01} valueLabel={bkNum(wt.wMartingale, 2)}/>
+            <Slider label="One-sided weight" k="wOneSided" min={0} max={1} step={0.01} valueLabel={bkNum(wt.wOneSided, 2)}/>
+            <Slider label="Burst weight" k="wBurst" min={0} max={1} step={0.01} valueLabel={bkNum(wt.wBurst, 2)}/>
+            <Slider label="Too-good weight" k="wTooGood" min={0} max={1} step={0.01} valueLabel={bkNum(wt.wTooGood, 2)}/>
+          </div>
+          <div className="mb-1 mt-3 text-[11px] uppercase tracking-wide text-slate-500">bucket thresholds</div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Slider label="MEDIUM ≥" k="toxMed" min={0} max={1} step={0.01} valueLabel={bkNum(wt.toxMed, 2)}/>
+            <Slider label="HIGH ≥" k="toxHigh" min={0} max={1} step={0.01} valueLabel={bkNum(wt.toxHigh, 2)}/>
+            <Slider label="EXTREME ≥" k="toxExtreme" min={0} max={1} step={0.01} valueLabel={bkNum(wt.toxExtreme, 2)}/>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-4 border-t border-slate-800 pt-3">
+            <div>
+              <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">desk bucket split</div>
+              <SplitBar segments={deskSplit} height={10} showLegend/>
+            </div>
+            <div>
+              <div className="mb-1 text-[11px] uppercase tracking-wide text-slate-500">your bucket split</div>
+              <SplitBar segments={yourSplit} height={10} showLegend/>
+            </div>
+          </div>
+        </section>
+
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Score distribution <span className="text-xs font-normal text-slate-500">your policy · {rows.length} providers</span></div>
+          <div className="h-40"><ResponsiveContainer width="100%" height="100%">
+            <BarChart data={histogram} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
+              <XAxis dataKey="bin" stroke="#566673" fontSize={9} interval={1}/>
+              <YAxis stroke="#566673" fontSize={10} allowDecimals={false}/>
+              <Tooltip contentStyle={TT}/>
+              <Bar dataKey="count" isAnimationActive={false}>
+                {histogram.map((b, i) => <Cell key={i} fill={riskColor(b.mid)}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer></div>
+          <div className="mb-2 mt-4 font-semibold">Average component profile <span className="text-xs font-normal text-slate-500">by bucket</span></div>
+          <div className="h-52"><ResponsiveContainer width="100%" height="100%">
+            <RadarChart data={radarData.axes} outerRadius="72%">
+              <PolarGrid stroke="#1e2b36"/>
+              <PolarAngleAxis dataKey="axis" stroke="#8598a8" fontSize={10}/>
+              <PolarRadiusAxis domain={[0, 1]} tick={false} axisLine={false}/>
+              <Tooltip contentStyle={TT}/>
+              {radarData.present.map(b => <ReRadar key={b} name={b} dataKey={b} stroke={TOX_BUCKET_COLOR[b]} fill={TOX_BUCKET_COLOR[b]} fillOpacity={0.15}/>)}
+              <Legend wrapperStyle={{ fontSize: 10 }}/>
+            </RadarChart>
+          </ResponsiveContainer></div>
+        </section>
+      </div>
+
+      <section className="panel p-4">
+        <div className="mb-2 font-semibold">Risk vs. revenue exposure <span className="text-xs font-normal text-slate-500">x = composite score (yours) · y = B-book revenue · bubble = lots traded</span></div>
+        <div className="h-72"><ResponsiveContainer width="100%" height="100%">
+          <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
+            <CartesianGrid stroke="#1e2b36"/>
+            <XAxis type="number" dataKey="simScore" domain={[0, 1]} stroke="#566673" fontSize={10} name="tox score"/>
+            <YAxis type="number" dataKey="bBookTotalRev" stroke="#566673" fontSize={10} name="B-book rev" tickFormatter={(v) => fmtUsd(v)}/>
+            <ZAxis type="number" dataKey="totalLots" range={[30, 400]} name="lots"/>
+            <ReferenceLine y={0} stroke="#37505f"/>
+            <ReferenceLine x={wt.toxHigh} stroke="#f59e0b" strokeDasharray="4 3"/>
+            <Tooltip contentStyle={TT} cursor={{ strokeDasharray: "3 3" }}
+              formatter={(v, n) => n === "B-book rev" ? fmtUsd(v, { plus: true }) : n === "lots" ? bkNum(v, 1) : bkNum(v)}
+              labelFormatter={() => ""} content={({ active, payload }) => {
+                if (!active || !payload?.length) return null;
+                const r = payload[0].payload;
+                return <div style={TT} className="p-2"><div className="font-semibold text-slate-200">{r.name}</div>
+                  <div className="text-slate-400">score {bkNum(r.simScore)} · <span style={{ color: TOX_BUCKET_COLOR[r.simBucket] }}>{r.simBucket}</span></div>
+                  <div className="text-slate-400">rev {fmtUsd(r.bBookTotalRev, { plus: true })} · {bkNum(r.totalLots, 1)} lots</div></div>;
+              }}/>
+            <Scatter data={sim.rows} isAnimationActive={false}>
+              {sim.rows.map((r, i) => <Cell key={i} fill={TOX_BUCKET_COLOR[r.simBucket]} fillOpacity={0.75}/>)}
+            </Scatter>
+          </ScatterChart>
+        </ResponsiveContainer></div>
+      </section>
+
+      <section className="panel overflow-hidden">
+        <div className="border-b border-slate-800 px-4 py-2 font-semibold">Revenue at risk by bucket <span className="text-xs font-normal text-slate-500">desk formula · .brk.tox.score joined to book revenue</span></div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[680px] text-left text-xs">
+            <thead className="bg-[#0a121a] text-slate-500"><tr>{["Bucket", "Providers", "Trades", "Lots", "Client P&L", "B-book rev", "Avg tox", "Avg MaxDD%", "Avg win%"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody className="tabular-nums">
+              {TOX_BUCKET_ORDER.map(b => {
+                const r = (data.toxBucketRev || []).find(x => x.bucket === b);
+                return <tr key={b} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+                  <td className="px-3 py-1.5"><span className={`badge ${BT_TOX_BADGE[b]}`}>{b}</span></td>
+                  <td className="px-3 py-1.5 text-slate-300">{r?.nProviders ?? 0}</td>
+                  <td className="px-3 py-1.5 text-slate-400">{fmtCount(r?.nTrades)}</td>
+                  <td className="px-3 py-1.5 text-slate-500">{bkNum(r?.totalLots, 0)}</td>
+                  <td className={`px-3 py-1.5 ${pnlTone(r?.clientNetProfit)}`}>{r ? fmtUsd(r.clientNetProfit, { plus: true }) : "—"}</td>
+                  <td className={`px-3 py-1.5 font-semibold ${pnlTone(r?.bBookRev)}`}>{r ? fmtUsd(r.bBookRev, { plus: true }) : "—"}</td>
+                  <td className="px-3 py-1.5" style={{ color: riskColor(r?.avgToxScore) }}>{bkNum(r?.avgToxScore)}</td>
+                  <td className={`px-3 py-1.5 ${pnlTone(r?.avgMaxDDPct)}`}>{bkNum(r?.avgMaxDDPct, 0)}</td>
+                  <td className="px-3 py-1.5 text-slate-400">{bkPct(r?.avgWinRatePct, 0)}</td>
+                </tr>;
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {toxAlerts.length > 0 && <section className="panel overflow-hidden">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 px-4 py-2">
+          <span className="font-semibold">Toxicity breach alerts</span>
+          <span className="text-xs font-normal text-slate-500">.brk.alert.breaches · kind=TOXICITY</span>
+        </div>
+        <div className="max-h-[30vh] overflow-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Provider", "Severity", "Tox score", "Threshold", "Message"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody className="tabular-nums">
+              {toxAlerts.map((r, i) => <tr key={i} className="border-t border-slate-800/60">
+                <td className="px-3 py-1.5 text-slate-200"><span className="font-mono text-slate-500">{r.signalId}</span> {r.name}</td>
+                <td className="px-3 py-1.5"><span className={`badge ${BT_SEV_BADGE[r.severity] || "bg-slate-800"}`}>{r.severity}</span></td>
+                <td className="px-3 py-1.5 text-rose-300">{bkNum(r.obsValue)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkNum(r.threshold)}</td>
+                <td className="px-3 py-1.5 text-slate-400">{r.message}</td>
+              </tr>)}
+            </tbody>
+          </table>
+        </div>
+      </section>}
+
+      <section className="panel overflow-hidden">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 px-4 py-2">
+          <span className="font-semibold">Per-signal toxicity detail</span>
+          <span className="text-xs font-normal text-slate-500">every active provider · bucket recomputed live under your formula</span>
+          <span className="ml-2 flex overflow-hidden rounded border border-slate-800 text-xs">
+            {TOX_TABS.map(t => <button key={t} onClick={() => setBucketTab(t)}
+              className={`px-2 py-1 ${bucketTab === t ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{t}</button>)}
+          </span>
+          <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={changedOnly} onChange={e => setChangedOnly(e.target.checked)}/> changed vs desk only ({sim.nChanged})</label>
+          <span className="relative ml-auto">
+            <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-600"/>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="search provider / broker"
+              className="rounded border border-slate-800 bg-slate-950/60 py-1 pl-6 pr-2 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-cyan-700"/>
+          </span>
+        </div>
+        <div className="max-h-[56vh] overflow-auto">
+          <table className="w-full min-w-[1180px] text-left text-xs">
+            <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Provider", "Broker", "Trades", "Components", "Score", "Desk", "Yours", "Win%", "MaxDD%", "Buy%", "Hold p50", "<5m%", "Cancel%", "B-book rev"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody className="tabular-nums">
+              {filteredRows.map((r, i) => <tr key={i} className={`border-t border-slate-800/60 hover:bg-slate-900/50 ${r.changed ? "bg-amber-950/10" : ""}`}>
+                <td className="px-3 py-1.5 text-slate-200"><span className="font-mono text-slate-500">{r.signalId}</span> {r.name}</td>
+                <td className="px-3 py-1.5 text-slate-400">{r.brokerTag}</td>
+                <td className="px-3 py-1.5 text-slate-400">{fmtCount(r.nTrades)}</td>
+                <td className="px-3 py-1.5">
+                  <div className="flex items-end gap-0.5" title={BT_TOX_COMPONENTS.map(c => `${c.label} ${bkNum(r[c.key])}`).join(" · ")}>
+                    {BT_TOX_COMPONENTS.map(c => <span key={c.key} className="w-2 rounded-t bg-slate-800" style={{ height: `${4 + 18 * Math.max(0, Math.min(1, r[c.key] || 0))}px`, background: riskColor(r[c.key]) }}/>)}
+                  </div>
+                </td>
+                <td className="px-3 py-1.5 font-semibold" style={{ color: riskColor(r.simScore) }}>{bkNum(r.simScore)}</td>
+                <td className="px-3 py-1.5"><span className={`badge ${BT_TOX_BADGE[r.bucket] || "bg-slate-800"}`}>{r.bucket}</span></td>
+                <td className="px-3 py-1.5">
+                  <span className={`badge ${BT_TOX_BADGE[r.simBucket] || "bg-slate-800"}`}>{r.simBucket}</span>
+                  {r.changed && <span className="ml-1 text-[10px] text-amber-400">changed</span>}
+                </td>
+                <td className="px-3 py-1.5 text-slate-400">{bkPct(r.winRatePct, 0)}</td>
+                <td className={`px-3 py-1.5 ${pnlTone(r.maxDDPct)}`}>{bkNum(r.maxDDPct, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkPct(r.buyShare, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkNum(r.p50HoldMin, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkPct(r.sub5MinPct, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkPct(r.cancelRatePct, 0)}</td>
+                <td className={`px-3 py-1.5 font-semibold ${pnlTone(r.bBookTotalRev)}`}>{fmtUsd(r.bBookTotalRev, { plus: true })}</td>
+              </tr>)}
+              {!filteredRows.length && <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-600">no providers match this filter</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading toxicity analytics…</div>}
+  </div>;
+}
+
+// ---- Client Clusters (behavioural segmentation) -----------------------
+// /api/brokertech/clusters -> modules/analytics/brokerTech/brokerTech.q's
+// .brk.cluster.run: a from-scratch, deterministic k-means (farthest-point
+// seeding, no RNG) over standardised size/duration/symbol-diversity/
+// session-mix/profitability/profitability-by-size features. Its own
+// endpoint (k is a real clustering parameter, not a display cap), its own
+// cache, independent of the other 3 Broker pages' shared /api/brokertech.
+const CLUSTER_COLORS = ["#22d3ee", "#34d399", "#f59e0b", "#f43f5e", "#a78bfa", "#38bdf8", "#84cc16", "#e879f9", "#fb923c", "#2dd4bf", "#818cf8", "#f472b6"];
+const clusterColor = (id) => CLUSTER_COLORS[((id % CLUSTER_COLORS.length) + CLUSTER_COLORS.length) % CLUSTER_COLORS.length];
+const SESSION_SEGS = (r) => [
+  { label: "Asian", value: r.asianPct || 0, color: "#818cf8" },
+  { label: "London", value: r.londonPct || 0, color: "#22d3ee" },
+  { label: "NY", value: r.nyPct || 0, color: "#f59e0b" },
+];
+
+function ClientClusters() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookback, setLookback] = useState(90);
+  const [k, setK] = useState(5);
+  const [clusterTab, setClusterTab] = useState("All");
+  const [q, setQ] = useState("");
+
+  const load = useCallback((lb, kk) => {
+    fetch(new URL(`/api/brokertech/clusters?lookbackDays=${lb}&k=${kk}&minTrades=10`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(lookback, k); }, [load, lookback, k]);
+  useEffect(() => { if (!auto) return; const id = setInterval(() => load(lookback, k), 20000); return () => clearInterval(id); }, [auto, load, lookback, k]);
+
+  const m = data?.meta || {};
+  const clusters = data?.clusters || [];
+  const clients = data?.clients || [];
+  const netProfitTotal = clients.reduce((a, r) => a + (r.netProfit || 0), 0);
+  const largest = clusters[0] || null;
+
+  const clusterTabs = ["All", ...clusters.map(c => String(c.clusterId))];
+  const filteredClients = useMemo(() => {
+    let out = clients;
+    if (clusterTab !== "All") out = out.filter(r => String(r.clusterId) === clusterTab);
+    if (q.trim()) { const needle = q.trim().toLowerCase(); out = out.filter(r => (r.name || "").toLowerCase().includes(needle)); }
+    return [...out].sort((a, b) => (a.clusterId - b.clusterId) || Math.abs(b.netProfit || 0) - Math.abs(a.netProfit || 0));
+  }, [clients, clusterTab, q]);
+
+  const TT2 = ({ active, payload, fields }) => {
+    if (!active || !payload?.length) return null;
+    const r = payload[0].payload;
+    return <div style={TT} className="p-2">
+      <div className="font-semibold text-slate-200">{r.name}</div>
+      <div style={{ color: clusterColor(r.clusterId) }}>{r.label}</div>
+      {fields.map(([k2, fmt]) => <div key={k2} className="text-slate-400">{k2}: {fmt(r[k2])}</div>)}
+    </div>;
+  };
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">client clustering · <span className="text-slate-500">.brk.cluster.* over brokerTech_hdb (C:/data/retail) · deterministic k-means, no RNG</span></span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[30, 90, 180, 365].map(d => <button key={d} onClick={() => setLookback(d)}
+          className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <span className="flex items-center gap-1.5 text-slate-500">k=
+        <span className="flex overflow-hidden rounded border border-slate-800">
+          {[2, 3, 4, 5, 6, 8, 10].map(n => <button key={n} onClick={() => setK(n)}
+            className={`px-2 py-1 ${k === n ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{n}</button>)}
+        </span>
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(lookback, k)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {m.sDate && <span className="tabular-nums">{m.sDate} → {m.eDate}</span>}
+        {data && <span className="text-slate-500">{fmtCount(m.nClients)} clients · minTrades ≥ 10</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/brokertech/clusters — {err}
+      <div className="mt-1 text-rose-400/70">needs brokerTech_hdb (startupAllByModule.sh brokerTech) with modules/analytics/brokerTech/brokerTech.q in its hdb.json libraries, and OPENQ_BROKERTECH_HDB set.</div></div>}
+
+    {data && <>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label="Active clients" value={fmtCount(m.nClients)} icon={Users} sub={`minTrades ≥ ${m.minTrades ?? 10} · window trades ${fmtCount(m.nTradeRows)}`}/>
+        <StatTile label="Clusters formed" value={String(clusters.length)} icon={Boxes} sub={`k = ${m.k ?? k} requested`} accent="#a78bfa"/>
+        <StatTile label="Largest segment" value={largest ? `${largest.nProviders}` : "—"} icon={GitBranch}
+          sub={largest ? largest.label : "—"} accent={largest ? clusterColor(largest.clusterId) : undefined}/>
+        <StatTile label="Client net P&L (window)" value={fmtUsd(netProfitTotal, { plus: true })} icon={netProfitTotal >= 0 ? TrendingUp : TrendingDown}
+          tone={netProfitTotal > 0 ? "warn" : "pos"} sub="sum across all clustered clients"/>
+      </div>
+
+      <section className="panel p-4">
+        <div className="mb-3 font-semibold">Cluster overview <span className="text-xs font-normal text-slate-500">size · duration · symbols · session mix · profitability-by-size</span></div>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {clusters.map(c => <div key={c.clusterId} className="rounded border border-slate-800 bg-slate-950/40 p-3">
+            <div className="flex items-center justify-between">
+              <span className="flex items-center gap-1.5 font-medium text-slate-200">
+                <span className="h-2.5 w-2.5 rounded-full" style={{ background: clusterColor(c.clusterId) }}/>{c.label}
+              </span>
+              <span className="tabular-nums text-xs text-slate-400">{c.nProviders} clients</span>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] tabular-nums">
+              <span className="text-slate-500">avg size (lots)</span><span className="text-slate-200">{bkNum(c.avgLots, 2)}</span>
+              <span className="text-slate-500">med duration</span><span className="text-slate-200">{bkNum(c.medHoldMin, 0)}m</span>
+              <span className="text-slate-500">avg symbols</span><span className="text-slate-200">{bkNum(c.nSymbols, 1)}</span>
+              <span className="text-slate-500">symbol HHI</span><span className="text-slate-200">{bkNum(c.symbolHHI, 2)}</span>
+              <span className="text-slate-500">profit factor</span><span className="text-slate-200">{bkNum(c.profitFactor, 2)}</span>
+              <span className="text-slate-500">size-profit bias</span><span className={pnlTone(c.sizeProfitBias)}>{bkNum(c.sizeProfitBias, 2)}</span>
+            </div>
+            <div className="mt-2">
+              <div className="mb-0.5 text-[10px] uppercase tracking-wide text-slate-600">time of trading</div>
+              <SplitBar segments={SESSION_SEGS(c)} height={6}/>
+            </div>
+            <div className="mt-2 flex items-center justify-between border-t border-slate-800 pt-1.5 text-xs">
+              <span className="text-slate-500">net P&L</span>
+              <span className={`font-semibold ${pnlTone(c.netProfit)}`}>{fmtUsd(c.netProfit, { plus: true })}</span>
+            </div>
+          </div>)}
+        </div>
+      </section>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Size vs. duration <span className="text-xs font-normal text-slate-500">x = avg lots/trade (size) · y = median hold time (duration) · bubble = trade count</span></div>
+          <div className="h-72"><ResponsiveContainer width="100%" height="100%">
+            <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36"/>
+              <XAxis type="number" dataKey="avgLots" scale="log" domain={["auto", "auto"]} stroke="#566673" fontSize={10} name="avg lots"/>
+              <YAxis type="number" dataKey="medHoldMin" scale="log" domain={["auto", "auto"]} stroke="#566673" fontSize={10} name="hold min"/>
+              <ZAxis type="number" dataKey="nTrades" range={[30, 400]} name="trades"/>
+              <Tooltip content={<TT2 fields={[["avgLots", (v) => bkNum(v, 3)], ["medHoldMin", (v) => `${bkNum(v, 0)}m`], ["nTrades", (v) => fmtCount(v)]]}/>}/>
+              <Scatter data={clients} isAnimationActive={false}>
+                {clients.map((r, i) => <Cell key={i} fill={clusterColor(r.clusterId)} fillOpacity={0.8}/>)}
+              </Scatter>
+            </ScatterChart>
+          </ResponsiveContainer></div>
+        </section>
+
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Profitability by size <span className="text-xs font-normal text-slate-500">x = avg lots/trade · y = profit on own large trades − own small trades · bubble = total lots</span></div>
+          <div className="h-72"><ResponsiveContainer width="100%" height="100%">
+            <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36"/>
+              <XAxis type="number" dataKey="avgLots" scale="log" domain={["auto", "auto"]} stroke="#566673" fontSize={10} name="avg lots"/>
+              <YAxis type="number" dataKey="sizeProfitBias" stroke="#566673" fontSize={10} name="size-profit bias"/>
+              <ZAxis type="number" dataKey="totalLots" range={[30, 400]} name="lots"/>
+              <ReferenceLine y={0} stroke="#37505f"/>
+              <Tooltip content={<TT2 fields={[["avgLots", (v) => bkNum(v, 3)], ["sizeProfitBias", (v) => fmtUsd(v, { plus: true })], ["totalLots", (v) => bkNum(v, 1)]]}/>}/>
+              <Scatter data={clients} isAnimationActive={false}>
+                {clients.map((r, i) => <Cell key={i} fill={clusterColor(r.clusterId)} fillOpacity={0.8}/>)}
+              </Scatter>
+            </ScatterChart>
+          </ResponsiveContainer></div>
+          <div className="mt-1 text-[10px] text-slate-600">above the line: this client is more profitable on their own bigger trades (a B-book watch-item); below: more profitable on smaller ones</div>
+        </section>
+      </div>
+
+      <section className="panel overflow-hidden">
+        <div className="border-b border-slate-800 px-4 py-2 font-semibold">Cluster summary</div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[920px] text-left text-xs">
+            <thead className="bg-[#0a121a] text-slate-500"><tr>{["Cluster", "Clients", "Avg lots", "Med duration", "Avg symbols", "Symbol HHI", "Asian%", "London%", "NY%", "Profit factor", "Size-profit bias", "Net P&L"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody className="tabular-nums">
+              {clusters.map(c => <tr key={c.clusterId} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+                <td className="px-3 py-1.5"><span className="flex items-center gap-1.5 font-medium text-slate-200"><span className="h-2 w-2 rounded-full" style={{ background: clusterColor(c.clusterId) }}/>{c.label}</span></td>
+                <td className="px-3 py-1.5 text-slate-400">{c.nProviders}</td>
+                <td className="px-3 py-1.5 text-slate-300">{bkNum(c.avgLots, 2)}</td>
+                <td className="px-3 py-1.5 text-slate-300">{bkNum(c.medHoldMin, 0)}m</td>
+                <td className="px-3 py-1.5 text-slate-400">{bkNum(c.nSymbols, 1)}</td>
+                <td className="px-3 py-1.5 text-slate-400">{bkNum(c.symbolHHI, 2)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkPct(c.asianPct, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkPct(c.londonPct, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkPct(c.nyPct, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-300">{bkNum(c.profitFactor, 2)}</td>
+                <td className={`px-3 py-1.5 ${pnlTone(c.sizeProfitBias)}`}>{bkNum(c.sizeProfitBias, 2)}</td>
+                <td className={`px-3 py-1.5 font-semibold ${pnlTone(c.netProfit)}`}>{fmtUsd(c.netProfit, { plus: true })}</td>
+              </tr>)}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel overflow-hidden">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 px-4 py-2">
+          <span className="font-semibold">Per-client detail</span>
+          <span className="text-xs font-normal text-slate-500">every clustered client</span>
+          <span className="ml-2 flex flex-wrap overflow-hidden rounded border border-slate-800 text-xs">
+            {clusterTabs.map(t => <button key={t} onClick={() => setClusterTab(t)}
+              className={`px-2 py-1 ${clusterTab === t ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{t === "All" ? "All" : clusters.find(c => String(c.clusterId) === t)?.label || t}</button>)}
+          </span>
+          <span className="relative ml-auto">
+            <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-600"/>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="search provider"
+              className="rounded border border-slate-800 bg-slate-950/60 py-1 pl-6 pr-2 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-cyan-700"/>
+          </span>
+        </div>
+        <div className="max-h-[56vh] overflow-auto">
+          <table className="w-full min-w-[1160px] text-left text-xs">
+            <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Provider", "Cluster", "Trades", "Size (lots)", "Duration", "Symbols", "Time of trading", "Win%", "Profit factor", "Net P&L", "Size-profit bias"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody className="tabular-nums">
+              {filteredClients.map((r, i) => <tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+                <td className="px-3 py-1.5 text-slate-200"><span className="font-mono text-slate-500">{r.signalId}</span> {r.name}</td>
+                <td className="px-3 py-1.5"><span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ background: clusterColor(r.clusterId) }}/><span className="text-slate-300">{r.label}</span></span></td>
+                <td className="px-3 py-1.5 text-slate-400">{fmtCount(r.nTrades)}</td>
+                <td className="px-3 py-1.5 text-slate-300">{bkNum(r.avgLots, 2)}</td>
+                <td className="px-3 py-1.5 text-slate-300">{bkNum(r.medHoldMin, 0)}m</td>
+                <td className="px-3 py-1.5 text-slate-400">{r.nSymbols} <span className="text-slate-600">({r.top1Symbol} {bkPct(r.top1SymbolPct, 0)})</span></td>
+                <td className="px-3 py-1.5" style={{ minWidth: 100 }}><SplitBar segments={SESSION_SEGS(r)} height={6}/></td>
+                <td className="px-3 py-1.5 text-slate-400">{bkPct(r.winRatePct, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-300">{bkNum(r.profitFactor, 2)}</td>
+                <td className={`px-3 py-1.5 font-semibold ${pnlTone(r.netProfit)}`}>{fmtUsd(r.netProfit, { plus: true })}</td>
+                <td className={`px-3 py-1.5 ${pnlTone(r.sizeProfitBias)}`}>{bkNum(r.sizeProfitBias, 2)}</td>
+              </tr>)}
+              {!filteredClients.length && <tr><td colSpan={11} className="px-3 py-8 text-center text-slate-600">no clients match this filter</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading client clustering analytics…</div>}
+  </div>;
+}
+
+// ---- Execution Quality (order behaviour deep-dive) --------------------
+// Same shared /api/brokertech feed, built around .brk.exec.* - order mix
+// (market/pending/limit/stop) and stop-slippage, both written in
+// brokerTech.q but never surfaced on any page until now (cancel rate and
+// hold-time context already live in Toxic Analysis; this page is the full
+// execution-behaviour picture, cross-referenced against toxicity/revenue).
+function ExecutionQuality() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookback, setLookback] = useState(90);
+  const [q, setQ] = useState("");
+
+  const load = useCallback((lb) => {
+    fetch(new URL(`/api/brokertech?lookbackDays=${lb}`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(lookback); }, [load, lookback]);
+  useEffect(() => { if (!auto) return; const id = setInterval(() => load(lookback), 20000); return () => clearInterval(id); }, [auto, load, lookback]);
+
+  const m = data?.meta || {};
+  const rollup = data?.execRollup || {};
+  const rows = data?.execDetail || [];
+
+  const filteredRows = useMemo(() => {
+    let out = rows;
+    if (q.trim()) { const needle = q.trim().toLowerCase(); out = out.filter(r => (r.name || "").toLowerCase().includes(needle) || (r.brokerTag || "").toLowerCase().includes(needle)); }
+    return [...out].sort((a, b) => (b.cancelRatePct || 0) - (a.cancelRatePct || 0));
+  }, [rows, q]);
+
+  const cancelChart = useMemo(() => [...rows].sort((a, b) => (b.cancelRatePct || 0) - (a.cancelRatePct || 0)).slice(0, 15)
+    .map(r => ({ name: r.name, cancelRatePct: r.cancelRatePct, nOrders: r.nOrders })), [rows]);
+
+  const mixChart = useMemo(() => [...rows].sort((a, b) => (b.nOrders || 0) - (a.nOrders || 0)).slice(0, 15)
+    .map(r => ({ name: r.name, marketPct: r.marketPct, limitPct: r.limitPct, stopPct: r.stopPct })), [rows]);
+
+  const holdChart = useMemo(() => [...rows].filter(r => r.p50 != null).sort((a, b) => (b.nTrades || 0) - (a.nTrades || 0)).slice(0, 15)
+    .map(r => ({
+      name: r.name, p5: r.p5, p25: r.p25, p50: r.p50, p75: r.p75, p95: r.p95,
+      wLo: Math.max(0, r.p25 - r.p5), box: Math.max(0, r.p75 - r.p25), wHi: Math.max(0, r.p95 - r.p75),
+    })), [rows]);
+
+  const slipRows = useMemo(() => [...rows].filter(r => (r.nWithStop || 0) > 0)
+    .sort((a, b) => (b.stopHitRatePct || 0) - (a.stopHitRatePct || 0)), [rows]);
+
+  const HoldTT = ({ active, payload }) => {
+    if (!active || !payload?.length) return null;
+    const r = payload[0]?.payload;
+    if (!r) return null;
+    return <div style={TT} className="p-2">
+      <div className="font-semibold text-slate-200">{r.name}</div>
+      <div className="text-slate-400 tabular-nums">p5 {bkNum(r.p5, 0)} · p25 {bkNum(r.p25, 0)} · p50 {bkNum(r.p50, 0)} · p75 {bkNum(r.p75, 0)} · p95 {bkNum(r.p95, 0)} min</div>
+    </div>;
+  };
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">execution quality · <span className="text-slate-500">.brk.exec.* over brokerTech_hdb (C:/data/retail) · order mix, cancel rate, stop-slippage</span></span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[30, 90, 180, 365].map(d => <button key={d} onClick={() => setLookback(d)}
+          className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(lookback)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {m.sDate && <span className="tabular-nums">{m.sDate} → {m.eDate}</span>}
+        {data && <span className="text-slate-500">{fmtCount(rollup.nOrders)} orders · {m.nActive} active providers</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/brokertech — {err}
+      <div className="mt-1 text-rose-400/70">needs brokerTech_hdb (startupAllByModule.sh brokerTech) with modules/analytics/brokerTech/brokerTech.q in its hdb.json libraries, and OPENQ_BROKERTECH_HDB set.</div></div>}
+
+    {data && <>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label="Total orders" value={fmtCount(rollup.nOrders)} icon={Crosshair}
+          sub={`${fmtCount(rollup.nExecuted)} executed · ${fmtCount(rollup.nCancelled)} cancelled`}
+          split={[{ label: "executed", value: rollup.nExecuted, color: "#34d399" }, { label: "cancelled", value: rollup.nCancelled, color: "#f43f5e" }]}/>
+        <StatTile label="Book cancel rate" value={bkPct(rollup.bookCancelRatePct, 1)} icon={ListFilter}
+          sub="volume-weighted across all orders" tone={rollup.bookCancelRatePct > 50 ? "warn" : "mute"}
+          accent={rollup.bookCancelRatePct > 50 ? "#f59e0b" : undefined}/>
+        <StatTile label="Trades with a stop" value={fmtCount(rollup.nWithStop)} icon={Gauge}
+          sub={`${fmtCount(rollup.nStoppedOut)} stopped out`}/>
+        <StatTile label="Book stop-hit rate" value={bkPct(rollup.bookStopHitRatePct, 1)} icon={TrendingDown}
+          sub="of trades carrying a stop" tone={rollup.bookStopHitRatePct > 30 ? "warn" : "mute"}/>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Cancel-rate leaderboard <span className="text-xs font-normal text-slate-500">top 15 by cancel% · quote-stuffing lens</span></div>
+          <div className="h-72"><ResponsiveContainer width="100%" height="100%">
+            <BarChart data={cancelChart} layout="vertical" margin={{ top: 4, right: 16, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36" horizontal={false}/>
+              <XAxis type="number" domain={[0, 100]} stroke="#566673" fontSize={10} tickFormatter={(v) => `${v}%`}/>
+              <YAxis type="category" dataKey="name" stroke="#566673" fontSize={10} width={90}/>
+              <Tooltip contentStyle={TT} formatter={(v, n) => n === "cancelRatePct" ? bkPct(v, 1) : fmtCount(v)}/>
+              <Bar dataKey="cancelRatePct" name="cancel rate" isAnimationActive={false}>
+                {cancelChart.map((r, i) => <Cell key={i} fill={riskColor((r.cancelRatePct || 0) / 100)}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer></div>
+        </section>
+
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Order mix <span className="text-xs font-normal text-slate-500">top 15 by order count · market vs. limit vs. stop</span></div>
+          <div className="h-72"><ResponsiveContainer width="100%" height="100%">
+            <BarChart data={mixChart} layout="vertical" stackOffset="expand" margin={{ top: 4, right: 16, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36" horizontal={false}/>
+              <XAxis type="number" domain={[0, 100]} stroke="#566673" fontSize={10} tickFormatter={(v) => `${v}%`}/>
+              <YAxis type="category" dataKey="name" stroke="#566673" fontSize={10} width={90}/>
+              <Tooltip contentStyle={TT} formatter={(v) => bkPct(v, 1)}/>
+              <Legend wrapperStyle={{ fontSize: 10 }}/>
+              <Bar dataKey="marketPct" name="market" stackId="mix" fill="#34d399" isAnimationActive={false}/>
+              <Bar dataKey="limitPct" name="limit" stackId="mix" fill="#22d3ee" isAnimationActive={false}/>
+              <Bar dataKey="stopPct" name="stop" stackId="mix" fill="#f59e0b" isAnimationActive={false}/>
+            </BarChart>
+          </ResponsiveContainer></div>
+        </section>
+      </div>
+
+      <section className="panel p-4">
+        <div className="mb-2 font-semibold">Hold-time distribution <span className="text-xs font-normal text-slate-500">top 15 by trade count · box = p25–p75, whiskers = p5–p95 (minutes)</span></div>
+        <div className="h-80"><ResponsiveContainer width="100%" height="100%">
+          <BarChart data={holdChart} layout="vertical" margin={{ top: 4, right: 16, bottom: 4, left: 8 }}>
+            <CartesianGrid stroke="#1e2b36" horizontal={false}/>
+            <XAxis type="number" scale="log" domain={["auto", "auto"]} stroke="#566673" fontSize={10} tickFormatter={(v) => bkNum(v, 0)}/>
+            <YAxis type="category" dataKey="name" stroke="#566673" fontSize={10} width={90}/>
+            <Tooltip content={<HoldTT/>}/>
+            <Bar dataKey="p5" stackId="hold" fill="transparent" isAnimationActive={false}/>
+            <Bar dataKey="wLo" stackId="hold" fill="#334155" isAnimationActive={false}/>
+            <Bar dataKey="box" stackId="hold" fill="#22d3ee" isAnimationActive={false}/>
+            <Bar dataKey="wHi" stackId="hold" fill="#334155" isAnimationActive={false}/>
+          </BarChart>
+        </ResponsiveContainer></div>
+        <div className="mt-1 text-[10px] text-slate-600">cyan segment = interquartile range (p25–p75); grey whiskers reach to p5/p95 — a wide box means erratic hold times, a narrow one near p50 means a consistent style</div>
+      </section>
+
+      <section className="panel overflow-hidden">
+        <div className="border-b border-slate-800 px-4 py-2 font-semibold">Stop-slippage leaderboard <span className="text-xs font-normal text-slate-500">providers with ≥1 stopped trade · sorted by stop-hit rate</span></div>
+        <div className="max-h-[36vh] overflow-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Provider", "With stop", "Stopped out", "Stop-hit%", "Avg adverse gap", "Max adverse gap"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody className="tabular-nums">
+              {slipRows.map((r, i) => <tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+                <td className="px-3 py-1.5 text-slate-200"><span className="font-mono text-slate-500">{r.signalId}</span> {r.name}</td>
+                <td className="px-3 py-1.5 text-slate-400">{fmtCount(r.nWithStop)}</td>
+                <td className="px-3 py-1.5 text-slate-400">{fmtCount(r.nStoppedOut)}</td>
+                <td className="px-3 py-1.5 font-semibold" style={{ color: riskColor((r.stopHitRatePct || 0) / 100) }}>{bkPct(r.stopHitRatePct, 1)}</td>
+                <td className="px-3 py-1.5 text-slate-400">{bkNum(r.avgAdverseGapPx, 4)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkNum(r.maxAdverseGapPx, 4)}</td>
+              </tr>)}
+              {!slipRows.length && <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-600">no stopped-out trades in this window</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="panel overflow-hidden">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 px-4 py-2">
+          <span className="font-semibold">Per-provider execution detail</span>
+          <span className="text-xs font-normal text-slate-500">every active provider</span>
+          <span className="relative ml-auto">
+            <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-600"/>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="search provider / broker"
+              className="rounded border border-slate-800 bg-slate-950/60 py-1 pl-6 pr-2 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-cyan-700"/>
+          </span>
+        </div>
+        <div className="max-h-[56vh] overflow-auto">
+          <table className="w-full min-w-[1240px] text-left text-xs">
+            <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Provider", "Broker", "Orders", "Executed", "Cancelled", "Cancel%", "Market%", "Limit%", "Stop%", "Hold p50", "<5m%", "With stop", "Stop-hit%", "Tox"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody className="tabular-nums">
+              {filteredRows.map((r, i) => <tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+                <td className="px-3 py-1.5 text-slate-200"><span className="font-mono text-slate-500">{r.signalId}</span> {r.name}</td>
+                <td className="px-3 py-1.5 text-slate-400">{r.brokerTag}</td>
+                <td className="px-3 py-1.5 text-slate-400">{fmtCount(r.nOrders)}</td>
+                <td className="px-3 py-1.5 text-slate-400">{fmtCount(r.nExecuted)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{fmtCount(r.nCancelled)}</td>
+                <td className="px-3 py-1.5 font-semibold" style={{ color: riskColor((r.cancelRatePct || 0) / 100) }}>{bkPct(r.cancelRatePct, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkPct(r.marketPct, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkPct(r.limitPct, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkPct(r.stopPct, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-400">{bkNum(r.p50, 0)}m</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkPct(r.sub5MinPct, 0)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{fmtCount(r.nWithStop)}</td>
+                <td className="px-3 py-1.5 text-slate-500">{bkPct(r.stopHitRatePct, 0)}</td>
+                <td className="px-3 py-1.5"><span className={`badge ${BT_TOX_BADGE[r.bucket] || "bg-slate-800"}`}>{r.bucket}</span></td>
+              </tr>)}
+              {!filteredRows.length && <tr><td colSpan={14} className="px-3 py-8 text-center text-slate-600">no providers match this filter</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading execution-quality analytics…</div>}
+  </div>;
+}
+
+// ---- Economic Calendar (eFX) -------------------------------------------
+// /api/calendar -> the fxStreet economic-calendar archive (C:/data/calendar,
+// calendar_hdb :5078, modules/ingest/calendar/) - scheduled/released macro
+// events, 2010-01 through whatever's been scraped. A date-range browser:
+// quick prev/next-range stepping for casual scrolling, plus an explicit
+// start/end date-range picker (bounded to the archive's real min/max, from
+// the API's own meta) for jumping straight to any historical window.
+const ECON_IMP_BADGE = {
+  HIGH: "bg-rose-950 text-rose-300", MEDIUM: "bg-amber-950 text-amber-300",
+  LOW: "bg-slate-800 text-slate-400", NONE: "bg-indigo-950 text-indigo-300",
+};
+const ECON_IMPORTANCE = ["HIGH", "MEDIUM", "LOW", "NONE"];
+// 2-letter ISO codes -> flag emoji via the regional-indicator-symbol trick;
+// 3-letter/composite codes (EMU, ...) fall back to no flag, text only.
+function countryFlag(code) {
+  if (!code || code.length !== 2) return null;
+  const c = code.toUpperCase();
+  if (!/^[A-Z]{2}$/.test(c)) return null;
+  return String.fromCodePoint(...[...c].map(ch => 127397 + ch.charCodeAt(0)));
+}
+function fmtEconVal(v, unit, potency) {
+  if (v == null || !isFinite(v)) return "—";
+  const pot = potency && potency !== "ZERO" ? potency : "";
+  const isPrefixCcy = unit && unit !== "%";
+  const body = `${v}${pot}`;
+  return isPrefixCcy ? `${unit}${body}` : `${body}${unit || ""}`;
+}
+function addDaysIso(iso, n) {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function spanDaysIso(start, end) {
+  return Math.round((new Date(end + "T00:00:00Z") - new Date(start + "T00:00:00Z")) / 86400000);
+}
+function thisWeekRange() {
+  const t = new Date(); const dow = (t.getUTCDay() + 6) % 7; // 0=Mon
+  const start = addDaysIso(t.toISOString().slice(0, 10), -dow);
+  return { start, end: addDaysIso(start, 6) };
+}
+
+// a past, timed (not all-day) event is clickable -> opens EventChartModal
+function isPastEvent(r) {
+  if (!r || r.allDay) return false;
+  const ms = Date.parse(`${r.date}T${r.time || "00:00:00"}Z`);
+  return Number.isFinite(ms) && ms < Date.now();
+}
+function fmtHM(ms) {
+  return new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "UTC" });
+}
+
+// Modal for the "click a past event" drill-down: /api/calendar/chart ->
+// fx_m1_massive (2009-09-25..2025-12-31) or fx_m1_yfinance (2026-08-09..),
+// whichever covers the event's date - the underlying currency pair +/-6h
+// around the release, with a reference line marking the exact release time.
+function EventChartModal({ event, onClose }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    setData(null); setErr(null);
+    const sp = new URLSearchParams({ date: event.date, currency: event.currency || "" });
+    if (event.time) sp.set("time", event.time);
+    fetch(new URL(`/api/calendar/chart?${sp.toString()}`, GW), { cache: "no-store" })
+      .then(res => res.json().then(j => { if (!res.ok) throw new Error(j.error || res.statusText); return j; }))
+      .then(setData)
+      .catch(e => setErr(e.message));
+  }, [event]);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const evtMs = Date.parse(`${event.date}T${event.time || "00:00:00"}Z`);
+  const chartData = useMemo(
+    () => (data?.bars || []).map(b => ({ t: b.t, close: b.c, high: b.h, low: b.l })),
+    [data]
+  );
+  const flag = countryFlag(event.country);
+
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
+    <div className="panel w-full max-w-3xl p-4" onClick={e => e.stopPropagation()}>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 text-sm text-slate-100">
+            {flag ? <span>{flag}</span> : null}
+            <span className="font-semibold">{event.event}</span>
+            <span className={`badge ${ECON_IMP_BADGE[event.importance] || "bg-slate-800"}`}>{event.importance}</span>
+          </div>
+          <div className="mt-0.5 text-xs text-slate-500">
+            {event.country} · {event.currency} · {event.date} {(event.time || "").slice(0, 5)} UTC
+            {event.actual != null && <span className="ml-2 text-slate-400">
+              actual <span className="text-slate-200">{fmtEconVal(event.actual, event.unit, event.potency)}</span>
+              {" "}vs consensus <span className="text-slate-300">{fmtEconVal(event.consensus, event.unit, event.potency)}</span>
+              {" "}(prev <span className="text-slate-400">{fmtEconVal(event.previous, event.unit, event.potency)}</span>)
+            </span>}
+          </div>
+        </div>
+        <button onClick={onClose} className="rounded p-1 text-slate-500 hover:bg-slate-900 hover:text-slate-200"><X size={16}/></button>
+      </div>
+
+      <div className="mt-3">
+        {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-6 text-center text-xs text-rose-300">{err}</div>}
+        {!err && !data && <div className="py-16 text-center text-xs text-slate-500">loading chart…</div>}
+        {!err && data && !chartData.length && <div className="py-16 text-center text-xs text-slate-500">
+          no intraday price data in this +/-{data.window?.hours ?? 6}h window ({data.pair}, {data.source})
+        </div>}
+        {!err && data && !!chartData.length && <>
+          <div className="mb-2 flex items-center gap-2 text-[11px] text-slate-500">
+            <span className="badge bg-slate-800 text-slate-300">{data.pair}</span>
+            <span>source: {data.source === "massive" ? "fx_m1_massive (vendor archive)" : "fx_m1_yfinance"}</span>
+            <span className="ml-auto">+/-{data.window?.hours ?? 6}h around release</span>
+          </div>
+          <ResponsiveContainer width="100%" height={320}>
+            <AreaChart data={chartData} margin={{ top: 8, right: 12, left: 4, bottom: 4 }}>
+              <defs>
+                <linearGradient id="evtChartFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#22d3ee" stopOpacity={0.35}/>
+                  <stop offset="100%" stopColor="#22d3ee" stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b"/>
+              <XAxis dataKey="t" type="number" domain={["dataMin", "dataMax"]} tickFormatter={fmtHM}
+                stroke="#475569" tick={{ fontSize: 10 }} minTickGap={40}/>
+              <YAxis domain={["auto", "auto"]} stroke="#475569" tick={{ fontSize: 10 }} width={64}
+                tickFormatter={(v) => v.toFixed(4)}/>
+              <Tooltip
+                labelFormatter={(v) => new Date(v).toISOString().slice(0, 16).replace("T", " ") + " UTC"}
+                formatter={(v, name) => [Number(v).toFixed(5), name]}
+                contentStyle={{ background: "#0b151e", border: "1px solid #1e293b", fontSize: 11 }}/>
+              <Area type="monotone" dataKey="close" stroke="#22d3ee" strokeWidth={1.5} fill="url(#evtChartFill)" dot={false}/>
+              {Number.isFinite(evtMs) && <ReferenceLine x={evtMs} stroke="#fb7185" strokeDasharray="4 3"
+                label={{ value: "event", position: "insideTopRight", fill: "#fb7185", fontSize: 10 }}/>}
+            </AreaChart>
+          </ResponsiveContainer>
+        </>}
+      </div>
+    </div>
+  </div>;
+}
+
+function EconomicCalendar() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  // computed client-side up front (not round-tripped from the server first)
+  // so there's exactly one fetch on mount, not a bootstrap-then-refetch dance.
+  const [range, setRange] = useState(thisWeekRange);
+  const [importance, setImportance] = useState(["HIGH", "MEDIUM", "LOW"]); // NONE (holidays) off by default
+  const [q, setQ] = useState("");
+  const [chartEvent, setChartEvent] = useState(null); // clicked past event -> EventChartModal
+
+  const load = useCallback((r) => {
+    const sp = new URLSearchParams();
+    if (r?.start) sp.set("start", r.start);
+    if (r?.end) sp.set("end", r.end);
+    if (importance.length && importance.length < ECON_IMPORTANCE.length) sp.set("importance", importance.join(","));
+    fetch(new URL(`/api/calendar?${sp.toString()}`, GW), { cache: "no-store" })
+      .then(res => res.json().then(j => { if (!res.ok) throw new Error(j.error || res.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, [importance]);
+
+  useEffect(() => { load(range); }, [range, load]);
+  useEffect(() => { if (!auto) return; const id = setInterval(() => load(range), 20000); return () => clearInterval(id); }, [auto, range, load]);
+
+  const m = data?.meta || {};
+  const minD = m.archiveMinDate, maxD = m.archiveMaxDate;
+
+  const step = (dir) => {
+    if (!range) return;
+    const span = spanDaysIso(range.start, range.end) + 1;
+    let start = addDaysIso(range.start, dir * span);
+    let end = addDaysIso(range.end, dir * span);
+    if (minD && start < minD) { start = minD; end = addDaysIso(start, span - 1); }
+    if (maxD && end > maxD) { end = maxD; start = addDaysIso(end, -(span - 1)); }
+    setRange({ start, end });
+  };
+  const goToday = () => setRange(thisWeekRange());
+
+  const filteredRows = useMemo(() => {
+    const rows = data?.rows || [];
+    if (!q.trim()) return rows;
+    const needle = q.trim().toLowerCase();
+    return rows.filter(r =>
+      (r.event || "").toLowerCase().includes(needle) ||
+      (r.country || "").toLowerCase().includes(needle) ||
+      (r.currency || "").toLowerCase().includes(needle) ||
+      (r.category || "").toLowerCase().includes(needle));
+  }, [data, q]);
+
+  const groups = useMemo(() => {
+    const byDate = new Map();
+    for (const r of filteredRows) { if (!byDate.has(r.date)) byDate.set(r.date, []); byDate.get(r.date).push(r); }
+    return [...byDate.entries()];
+  }, [filteredRows]);
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const toggleImportance = (level) => setImportance(cur => cur.includes(level) ? cur.filter(x => x !== level) : [...cur, level]);
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">economic calendar · <span className="text-slate-500">calendar_hdb (C:/data/calendar) · fxStreet scrape, {minD} → {maxD}</span></span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(range)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {data && <span className="text-slate-500">{fmtCount(m.nRows)} events</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <button onClick={() => step(-1)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><ChevronLeft size={12}/> prev range</button>
+      <div className="flex items-center gap-1.5">
+        <input type="date" value={range?.start || ""} min={minD} max={maxD}
+          onChange={e => setRange(r => ({ start: e.target.value, end: (r?.end && r.end >= e.target.value) ? r.end : e.target.value }))}
+          className="rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-slate-200 focus:outline-none focus:ring-1 focus:ring-cyan-700"/>
+        <span className="text-slate-600">→</span>
+        <input type="date" value={range?.end || ""} min={range?.start || minD} max={maxD}
+          onChange={e => setRange(r => ({ start: r?.start || e.target.value, end: e.target.value }))}
+          className="rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-slate-200 focus:outline-none focus:ring-1 focus:ring-cyan-700"/>
+      </div>
+      <button onClick={() => step(1)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900">next range <ChevronRight size={12}/></button>
+      <button onClick={goToday} className="rounded border border-slate-800 px-2 py-1 text-cyan-300 hover:bg-slate-900">this week</button>
+      {m.requestedSpanDays > m.maxRangeDays && <span className="text-amber-400">range capped to {m.maxRangeDays}d</span>}
+
+      <span className="ml-auto flex items-center gap-1.5">
+        <span className="text-slate-500">importance</span>
+        {ECON_IMPORTANCE.map(lvl => <button key={lvl} onClick={() => toggleImportance(lvl)}
+          className={`badge ${importance.includes(lvl) ? ECON_IMP_BADGE[lvl] : "bg-slate-900 text-slate-600"}`}>{lvl}</button>)}
+      </span>
+      <span className="relative">
+        <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-600"/>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="search event / country / currency"
+          className="rounded border border-slate-800 bg-slate-950/60 py-1 pl-6 pr-2 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-cyan-700"/>
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/calendar — {err}
+      <div className="mt-1 text-rose-400/70">needs calendar_hdb (startupAllByModule.sh calendar) reading C:/data/calendar, and OPENQ_CALENDAR_HDB set.</div></div>}
+
+    {data && <section className="panel overflow-hidden">
+      <div className="max-h-[72vh] overflow-auto">
+        <table className="w-full min-w-[900px] text-left text-xs">
+          <thead className="sticky top-0 z-10 bg-[#0a121a] text-slate-500"><tr>{["Time", "Country", "Event", "Importance", "Actual", "Consensus", "Previous"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+          <tbody className="tabular-nums">
+            {groups.map(([date, evs]) => <React.Fragment key={date}>
+              <tr className={`border-t border-slate-800 ${date === todayIso ? "bg-cyan-950/30" : "bg-slate-900/40"}`}>
+                <td colSpan={7} className="px-3 py-1.5 font-semibold text-slate-300">
+                  {new Date(date + "T00:00:00Z").toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })}
+                  {date === todayIso && <span className="ml-2 badge bg-cyan-950 text-cyan-300">today</span>}
+                  <span className="ml-2 font-normal text-slate-600">{evs.length} event{evs.length === 1 ? "" : "s"}</span>
+                </td>
+              </tr>
+              {evs.map((r, i) => {
+                const flag = countryFlag(r.country);
+                const surprise = r.actual != null && r.consensus != null ? (r.actual > r.consensus ? "up" : r.actual < r.consensus ? "down" : "flat") : null;
+                const clickable = isPastEvent(r);
+                return <tr key={i} onClick={clickable ? () => setChartEvent(r) : undefined}
+                  title={clickable ? "view price chart around this event" : undefined}
+                  className={`border-t border-slate-800/40 hover:bg-slate-900/50 ${clickable ? "cursor-pointer" : ""}`}>
+                  <td className="px-3 py-1.5 text-slate-500">{r.allDay ? "all day" : (r.time || "").slice(0, 5)}</td>
+                  <td className="px-3 py-1.5 text-slate-300">{flag ? <span className="mr-1">{flag}</span> : null}{r.country}<span className="ml-1 text-slate-600">{r.currency}</span></td>
+                  <td className="px-3 py-1.5 text-slate-200">
+                    {clickable && <CandlestickChart size={11} className="mr-1 inline text-cyan-500/70"/>}
+                    {r.event}
+                    {r.preliminary && <span className="ml-1.5 text-[10px] text-slate-500">(prelim)</span>}
+                    {r.tentative && <span className="ml-1.5 text-[10px] text-slate-500">(tentative)</span>}
+                    {r.speech && <span className="ml-1.5 text-[10px] text-slate-500">(speech)</span>}
+                    <span className="ml-1.5 text-[10px] text-slate-600">{r.category}</span>
+                  </td>
+                  <td className="px-3 py-1.5"><span className={`badge ${ECON_IMP_BADGE[r.importance] || "bg-slate-800"}`}>{r.importance}</span></td>
+                  <td className="px-3 py-1.5 font-semibold text-slate-100">
+                    <span className="inline-flex items-center gap-1">
+                      {fmtEconVal(r.actual, r.unit, r.potency)}
+                      {surprise === "up" && <ArrowUp size={11} className="text-cyan-400"/>}
+                      {surprise === "down" && <ArrowDown size={11} className="text-amber-400"/>}
+                    </span>
+                  </td>
+                  <td className="px-3 py-1.5 text-slate-400">{fmtEconVal(r.consensus, r.unit, r.potency)}</td>
+                  <td className="px-3 py-1.5 text-slate-500">{fmtEconVal(r.previous, r.unit, r.potency)}</td>
+                </tr>;
+              })}
+            </React.Fragment>)}
+            {!groups.length && <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-600">no events match this filter in the selected range</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading economic calendar…</div>}
+    {chartEvent && <EventChartModal event={chartEvent} onClose={() => setChartEvent(null)}/>}
+  </div>;
+}
+
 function App() {
   const [active,setActive] = useState("Overview");
   const [orders,setOrders] = useState(baseOrders);
@@ -5569,6 +7325,7 @@ function App() {
     if(active==="Market Impact") return <Impact/>;
     if(active==="Markout") return <Markout/>;
     if(active==="Backtest") return <Backtest/>;
+    if(active==="Economic Calendar") return <EconomicCalendar/>;
     if(active==="Spreads") return <Spreads/>;
     if(active==="Prime Finance") return <PrimeFinance/>;
     if(active==="Fee Calibration") return <BorrowFeeCalibration/>;
@@ -5576,6 +7333,11 @@ function App() {
     if(active==="Crowding") return <Crowding/>;
     if(active==="Counterparty") return <CounterpartyExposure/>;
     if(active==="Desk Risk") return <DeskRisk/>;
+    if(active==="Broker Tech") return <BrokerTech/>;
+    if(active==="A/B Book") return <ABBook/>;
+    if(active==="Toxic Analysis") return <ToxicAnalysis/>;
+    if(active==="Client Clusters") return <ClientClusters/>;
+    if(active==="Execution Quality") return <ExecutionQuality/>;
     if(active==="Process Mon") return <ProcMon/>;
     if(active==="Resources") return <Processes/>;
     if(active==="Logs") return <Logs/>;

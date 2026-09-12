@@ -618,9 +618,16 @@ See "Prime Finance" below.
 Query-behaviour snapshot off every watched gw-capable process. openQ's
 `core/utils/gateway.q` keeps every query it ever routed in the keyed
 in-memory table `.util.gw.queue` (finished rows retain `returned` / `took` /
-`error` / `discard`) plus per-backend-handle counters in `.util.gw.servers`;
+`error` / `errType` / `discard`) plus per-backend-handle counters in
+`.util.gw.servers` and the live per-query fan-out slots in `.util.gw.results`;
 `src/queryMon.js` runs one read-only select per target and rolls it up. A
 process without `.util.gw.queue` comes back `hasGw:false`.
+
+`errType` (`` `timeout`backend`sizecap`join`disconnect ``, `` ` `` for a
+clean finish) is set by `.util.gw.finishQuery` at each failure site. Against a
+gateway still on a pre-`errType` `gateway.q` the column is absent and the
+reader falls back to a timeout-vs-`execution` split derived from timing
+(`hasErrType:false` on that target flags the downgrade).
 
 The watch set is `OPENQ_QUERYMON_TARGETS` (same `name=host:port,…` format as
 `OPENQ_GW_TARGETS`; falls back to the `/api/query` targets when unset). It's
@@ -634,15 +641,28 @@ gateway query at them), and `default_gw` (`gw0` 5013, the default demo
 pipeline's gateway — idle unless you query it directly).
 
 Per target: `connected`, `hasGw`, `totalQueries` (`.util.gw.ID`), `queued`
-(in-flight), `doneCnt` / `errCnt` / `discardCnt`, `latencyMs`
-(`p50`/`p95`/`p99`/`max`/`avg` of `took` over the last `winMin` minutes),
+(in-flight) split into `waitingCnt` (queued, no idle backend yet) and
+`dispatchedCnt` (`count .util.gw.results` — sent, awaiting reply),
+`doneCnt` / `errCnt` / `discardCnt`, `latencyMs`
+(`p50`/`p95`/`p99`/`max`/`avg` of `took` — execution time — over the last
+`winMin` minutes), `waitMs` (same percentiles for `submitted - time`, the
+time a query sat queued before dispatch — the backpressure metric),
+`samplesMs` / `waitSamplesMs` (the ≤200 sorted sample vectors, so the "all"
+view pools real percentiles rather than averaging per-gateway pXX),
 `qpsWindow`, `errRateWindow`, `byType` (per `rdb`/`hdb`/`rdb+hdb` route: n,
 avg/max ms, errors), `servers` (per handle: `querycount`, `usageMs`,
-`lastAgoSec`, `active`/`inuse`), `recent` (newest N queries — id, age,
-route, table, `tookMs`, error/discard/pending) and `slowest` (top N by
-`took`), and `series` (per-minute query/error/avg-ms buckets, last
-`histMin` min). No parameters. The dashboard's **System > Query Mon** page
-renders it with a tab per gateway.
+`lastAgoSec`, `active`/`inuse`, plus `qpsWin` / `busyPct` — the reader diffs
+successive snapshots' cumulative counters over `asOf`), `srvSummary`
+(`regd`/`active`/`inuse` per serverType — `active < regd` means a backend
+dropped), `errByClass` (count per `errType`), `fanoutSplit` (single- vs
+multi-target queries: n, avg/max ms, errors), `byClient` (top clients by
+query count: `n`, `inflight`, `errs`, `avgMs`, `lastAgoSec`), `recent`
+(newest N queries — id, age, route, table, `tookMs`, error/discard/pending)
+and `slowest` (top N by `took`), `series` (per-minute query/error/avg-ms
+buckets, last `histMin` min) and `backlog` (open-query depth reconstructed
+per minute over the same window). No parameters. The dashboard's **System >
+Query Mon** page renders it with a tab per gateway plus an "all" tab that
+pools every target.
 
 | env | default | meaning |
 | --- | --- | --- |

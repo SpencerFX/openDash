@@ -26,6 +26,9 @@ const { ReplayManager } = require("./replay");
 const { EqOhlcReader } = require("./eqOhlc"); // also drives fxOhlc (same class, fx_hdb target)
 const { CandlePatternReader } = require("./candlePattern");
 const { BacktestReader } = require("./backtest");
+const { BrokerTechReader } = require("./brokerTech");
+const { EconCalendarReader } = require("./calendar");
+const { FxEventChartReader } = require("./fxEvent");
 const { QueryMonReader } = require("./queryMon");
 const { PidstatsReader } = require("./pidstats");
 const { JobStatusReader } = require("./jobStatus");
@@ -172,6 +175,12 @@ function createServer() {
   const candlePattern =
     config.candlePattern && config.candlePattern.enabled ? new CandlePatternReader(config.candlePattern) : null;
   const backtest = config.backtest && config.backtest.enabled ? new BacktestReader(config.backtest) : null;
+  const brokerTech =
+    config.brokerTech && config.brokerTech.enabled ? new BrokerTechReader(config.brokerTech) : null;
+  const calendar =
+    config.calendar && config.calendar.enabled ? new EconCalendarReader(config.calendar) : null;
+  const fxEventChart =
+    config.fxEventChart && config.fxEventChart.enabled ? new FxEventChartReader(config.fxEventChart) : null;
   const queryMon = config.queryMon && config.queryMon.enabled ? new QueryMonReader(config.queryMon) : null;
   const pidstats = config.pidstats && config.pidstats.enabled ? new PidstatsReader(config.pidstats) : null;
   const jobStatus = config.jobStatus && config.jobStatus.enabled ? new JobStatusReader(config.jobStatus) : null;
@@ -224,6 +233,9 @@ function createServer() {
           fx: fxOhlc ? fxOhlc.status() : { enabled: false },
           candlePattern: candlePattern ? candlePattern.status() : { enabled: false },
           backtest: backtest ? backtest.status() : { enabled: false },
+          brokerTech: brokerTech ? brokerTech.status() : { enabled: false },
+          calendar: calendar ? calendar.status() : { enabled: false },
+          fxEventChart: fxEventChart ? fxEventChart.status() : { enabled: false },
           queryMon: queryMon ? queryMon.status() : { enabled: false },
           pidstats: pidstats ? pidstats.status() : { enabled: false },
           jobStatus: jobStatus ? jobStatus.status() : { enabled: false },
@@ -418,6 +430,94 @@ function createServer() {
             ddLimit: sp.get("ddLimit"),
             phaseIn: sp.get("phaseIn"),
             barsPerYear: sp.get("barsPerYear"),
+          })
+        );
+      }
+
+      if (url.pathname === "/api/brokertech") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!brokerTech) {
+          const e = new Error(
+            "brokerTech disabled (set OPENQ_BROKERTECH_HDB to brokerTech_hdb host:port, " +
+              "start scripts/startStop/startupAllByModule.sh brokerTech)"
+          );
+          e.statusCode = 503;
+          throw e;
+        }
+        const sp = url.searchParams;
+        return send(
+          res,
+          200,
+          await brokerTech.read({
+            lookbackDays: sp.get("lookbackDays"),
+            minTrades: sp.get("minTrades"),
+            top: sp.get("top"),
+          })
+        );
+      }
+
+      if (url.pathname === "/api/brokertech/clusters") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!brokerTech) {
+          const e = new Error(
+            "brokerTech disabled (set OPENQ_BROKERTECH_HDB to brokerTech_hdb host:port, " +
+              "start scripts/startStop/startupAllByModule.sh brokerTech)"
+          );
+          e.statusCode = 503;
+          throw e;
+        }
+        const sp = url.searchParams;
+        return send(
+          res,
+          200,
+          await brokerTech.clusters({
+            lookbackDays: sp.get("lookbackDays"),
+            k: sp.get("k"),
+            minTrades: sp.get("minTrades"),
+          })
+        );
+      }
+
+      if (url.pathname === "/api/calendar") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!calendar) {
+          const e = new Error(
+            "calendar disabled (set OPENQ_CALENDAR_HDB to calendar_hdb host:port, " +
+              "start scripts/startStop/startupAllByModule.sh calendar)"
+          );
+          e.statusCode = 503;
+          throw e;
+        }
+        const sp = url.searchParams;
+        return send(
+          res,
+          200,
+          await calendar.read({
+            start: sp.get("start"),
+            end: sp.get("end"),
+            country: sp.get("country"),
+            importance: sp.get("importance"),
+            category: sp.get("category"),
+          })
+        );
+      }
+
+      if (url.pathname === "/api/calendar/chart") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!fxEventChart) {
+          const e = new Error("fx event chart disabled (set OPENQ_FX_HDB to fx_hdb host:port)");
+          e.statusCode = 503;
+          throw e;
+        }
+        const sp = url.searchParams;
+        return send(
+          res,
+          200,
+          await fxEventChart.chart({
+            date: sp.get("date"),
+            time: sp.get("time"),
+            currency: sp.get("currency"),
+            pair: sp.get("pair"),
           })
         );
       }
@@ -656,6 +756,9 @@ function createServer() {
     if (fxOhlc) fxOhlc.start();
     if (candlePattern) candlePattern.start();
     if (backtest) backtest.start();
+    if (brokerTech) brokerTech.start();
+    if (calendar) calendar.start();
+    if (fxEventChart) fxEventChart.start();
     if (queryMon) queryMon.start();
     if (pidstats) pidstats.start();
     if (jobStatus) jobStatus.start();
@@ -683,6 +786,9 @@ function createServer() {
     if (fxOhlc) await fxOhlc.stop();
     if (candlePattern) await candlePattern.stop();
     if (backtest) await backtest.stop();
+    if (brokerTech) await brokerTech.stop();
+    if (calendar) await calendar.stop();
+    if (fxEventChart) await fxEventChart.stop();
     if (queryMon) await queryMon.stop();
     if (pidstats) await pidstats.stop();
     if (jobStatus) await jobStatus.stop();

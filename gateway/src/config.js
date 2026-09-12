@@ -641,6 +641,53 @@ const config = {
     };
   })(),
 
+  // retailR_hdb (cfg_proc/modules/retailR/hdb.json, port 5079, hdbroot
+  // C:/data/r) with modules/analytics/brokerTech/{brokerTech,
+  // brokerTechSourceR}.q loaded on it - the retail FX/CFD broker risk
+  // analytics for the "Broker Tech" page (/api/brokertech). Two platforms
+  // (mql5.com Signals + myfxbook.com) merged - see brokerTech.js's own
+  // header and brokerTechSourceR.q for how. Set OPENQ_BROKERTECH_HDB to
+  // 127.0.0.1:5077 to point back at the original single-platform
+  // brokerTech_hdb (cfg_proc/modules/brokerTech/hdb.json, hdbroot
+  // C:/data/retail) instead - same reader, same query shape, no code
+  // change needed either way. The whole .brk.* suite is a batch recompute
+  // over a date window, so the reader caches per (lookbackDays,minTrades,
+  // top) for OPENQ_BROKERTECH_TTL_MS. off/none/0 disables.
+  brokerTech: (function () {
+    const hp = str("OPENQ_BROKERTECH_HDB", "127.0.0.1:5079");
+    if (!hp || /^(off|none|0|false)$/i.test(hp)) return { enabled: false };
+    const [h, p] = hp.split(":");
+    return {
+      enabled: true,
+      host: h || "127.0.0.1",
+      port: Number(p) || 5079,
+      lookbackDays: Math.max(1, int("OPENQ_BROKERTECH_LOOKBACK_DAYS", 90)),
+      minTrades: Math.max(0, int("OPENQ_BROKERTECH_MIN_TRADES", 10)),
+      topN: Math.max(3, int("OPENQ_BROKERTECH_TOP", 15)),
+      ttlMs: Math.max(5000, int("OPENQ_BROKERTECH_TTL_MS", 60000)),
+      timeoutMs: Math.max(cepTimeoutMs, int("OPENQ_BROKERTECH_TIMEOUT_MS", 45000)),
+    };
+  })(),
+
+  // econCal HDB (calendar_hdb, cfg_proc/modules/calendar/hdb.json, port
+  // 5078, hdbroot C:/data/calendar) - fxStreet economic-calendar events
+  // (2010-> , ~204k rows, modules/ingest/calendar/) for the eFX > Economic
+  // Calendar page (/api/calendar). Default 127.0.0.1:5078; off/none/0
+  // disables. maxRangeDays caps how wide a single start/end request can be
+  // (a fat-fingered multi-year range shouldn't pull the whole archive).
+  calendar: (function () {
+    const hp = str("OPENQ_CALENDAR_HDB", "127.0.0.1:5078");
+    if (!hp || /^(off|none|0|false)$/i.test(hp)) return { enabled: false };
+    const [h, p] = hp.split(":");
+    return {
+      enabled: true,
+      host: h || "127.0.0.1",
+      port: Number(p) || 5078,
+      maxRangeDays: Math.max(1, int("OPENQ_CALENDAR_MAX_RANGE_DAYS", 62)),
+      timeoutMs: Math.max(cepTimeoutMs, int("OPENQ_CALENDAR_TIMEOUT_MS", 15000)),
+    };
+  })(),
+
   // the equities HDB (eq_hdb, cfg_proc/modules/eq/hdb.json, hdbroot
   // C:/data/db1/eq) - minute bars `eq_m1_yfinance` for the EQ > Charts
   // page. Default 127.0.0.1:5090; set OPENQ_EQ_HDB to off/none/0 to disable.
@@ -677,6 +724,25 @@ const config = {
       hdbName: "fx_hdb",
       startHint: 'the "fx" module (scripts/startStop/startupAllByModule.sh fx)',
       label: "fx-hdb",
+    };
+  })(),
+
+  // same fx_hdb target as `fx` above (OPENQ_FX_HDB, default 127.0.0.1:5093),
+  // but reads the long-history fx_m1_massive/fx_m1_yfinance archives that
+  // share that hdbroot (C:/data/db1/efx) - powers the "view chart" drill-
+  // down on a past event on the eFX > Economic Calendar page (a +/-N hour
+  // window around the release, see fxEvent.js). Independent on/off switch
+  // so it can be disabled without touching eFX > Charts.
+  fxEventChart: (function () {
+    const hp = str("OPENQ_FX_HDB", "127.0.0.1:5093");
+    if (!hp || /^(off|none|0|false)$/i.test(hp)) return { enabled: false };
+    const [h, p] = hp.split(":");
+    return {
+      enabled: true,
+      host: h || "127.0.0.1",
+      port: Number(p) || 5093,
+      windowHours: Math.max(1, int("OPENQ_FX_EVENT_WINDOW_HOURS", 6)),
+      timeoutMs: Math.max(cepTimeoutMs, int("OPENQ_FX_EVENT_TIMEOUT_MS", 15000)),
     };
   })(),
 
