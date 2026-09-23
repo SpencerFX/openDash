@@ -1,6 +1,6 @@
 "use strict";
 
-const { QSession } = require("./qSession");
+const { QGateway } = require("./qGateway");
 const { toRows } = require("./qshape");
 
 // Query-behaviour monitor. openQ's core/utils/gateway.q keeps every query it
@@ -10,6 +10,20 @@ const { toRows } = require("./qshape");
 // `.util.gw.results`. This reader pulls a snapshot + rollups off each configured
 // gateway process (gw0, mon_gw) and the System > Query Mon page renders it.
 // Read-only: one select, no state touched.
+//
+// Routed through openQ's own .util.gw.mon (core/utils/gateway.q) rather than
+// a plain sync IPC eval of a client-built q-string - the SNAP() template
+// this file used to hold now lives server-side, and the poll itself goes
+// over the same pooled async request/reply protocol (QGateway) every other
+// gw-routed reader (eq/fx OHLC, econCal) uses. Two effects, both requested:
+// this reader's own connections are visible/poolable like any other gw
+// client, and each poll is itself logged into the polled process's
+// .util.gw.queue (tagged serverType `self) - so Query Mon's own traffic
+// finally shows up in its own numbers, same benchmarking/visibility
+// rationale as the econCal migration. .util.gw.mon can't use
+// .util.gw.asyncExec's backend fan-out the way .oq.gw.query/symRoster/
+// econCal do (there's no backend for "this process's own local state" -
+// see its own header in gateway.q), so it self-answers directly instead.
 //
 // Signals beyond the raw counts:
 //   - queue wait time (submitted-time): time a query sat queued before dispatch
@@ -23,74 +37,6 @@ const { toRows } = require("./qshape");
 //   - active vs registered per serverType: srvSummary (removeServer flips active).
 //   - backlog time series: open-query depth reconstructed per minute over histMin.
 //   - per-client load + single- vs fan-out-target split.
-
-// nRecent newest queries, nSlow slowest completed, winMin latency window,
-// histMin per-minute history depth.
-const SNAP = (nRecent, nSlow, winMin, histMin) => `
-{[nRecent;nSlow;winMin;histMin]
-  if[not \`queue in key \`.util.gw; :\`hasGw\`err!(0b;"no .util.gw.queue on this process")];
-  now:.z.p;
-  span:{\`timespan\$1000000000*60*x};
-  hasET:\`errType in cols .util.gw.queue;
-  qq:0!.util.gw.queue;
-  qq:update qtable:{\$[1<count x; \$[-11h=type x 1; x 1; \`?]; \`?]} each query from qq;
-  done:select from qq where not null returned;
-  win:select from done where returned > now - span winMin;
-  wsrc:\$[count win; win; (neg 200) sublist done];
-  tk:asc \`float\$(exec took from wsrc)%1000000;
-  wt:asc \`float\$(exec (submitted-time) from wsrc where not null submitted)%1000000;
-  prc:{[v;p] \$[count v; v[(count[v]-1) & floor p*count v]; 0n]};
-  recent:select queryID, sinceSec:\`float\$(now-time)%1000000000, serverType,
-      qtable, tookMs:\`float\$took%1000000, error, discard, pending:null returned
-    from nRecent sublist \`time xdesc qq;
-  slowest:select queryID, sinceSec:\`float\$(now-time)%1000000000, serverType,
-      qtable, tookMs:\`float\$took%1000000, error, discard, pending:0b
-    from nSlow sublist \`took xdesc done;
-  byType:0!select n:count i, avgMs:\`float\$avg took%1000000, maxMs:\`float\$max took%1000000,
-      errs:sum error by serverType from done;
-  servers:0!select handle, serverType, inuse, active, querycount,
-      lastAgoSec:\`float\$(now-lastquery)%1000000000, usageMs:\`float\$usage%1000000
-    from .util.gw.servers;
-  srvSummary:0!select regd:count i, active:\`long\$sum active, inuse:\`long\$sum inuse
-    by serverType from .util.gw.servers;
-  series:0!select n:count i, avgMs:\`float\$avg took%1000000, errs:sum error
-      by minute:(\`long\$0D00:01) xbar returned from done where returned > now - span histMin;
-  edges:((\`long\$0D00:01) xbar now - span histMin) + span each 1+til histMin;
-  qcand:select time, returned from qq where (null returned) | returned > now - span histMin;
-  backlog:([] minute:edges;
-    depth:\`long\$\{[q;m] count select from q where time<=m,(null returned)|returned>m\}[qcand] each edges);
-  errRows:select from done where error;
-  errRows:\$[hasET; errRows;
-    update errType:?[(not timeout=0Wn) & (returned-time) >= timeout; \`timeout; \`execution] from errRows];
-  errByClass:0!select cnt:count i by errType from errRows;
-  byClient:10 sublist \`n xdesc 0!select n:count i, inflight:\`long\$sum null returned,
-      errs:\`long\$sum error, avgMs:\`float\$avg took%1000000,
-      lastAgoSec:\`float\$(now-max time)%1000000000 by clientH from qq;
-  fanoutSplit:0!select n:count i, avgMs:\`float\$avg took%1000000, maxMs:\`float\$max took%1000000,
-      errs:\`long\$sum error by fanout:1<count each serverType from done;
-  (\`hasGw\`totalQueries\`queued\`waitingCnt\`dispatchedCnt\`doneCnt\`errCnt\`discardCnt\`winCnt\`winMin\`histMin,
-   \`p50Ms\`p95Ms\`p99Ms\`maxMs\`avgMs\`samplesMs,
-   \`waitP50Ms\`waitP95Ms\`waitP99Ms\`waitMaxMs\`waitAvgMs\`waitSamplesMs,
-   \`byType\`servers\`srvSummary\`recent\`slowest\`series\`backlog\`errByClass\`byClient\`fanoutSplit\`asOf\`hasErrType) ! (
-    1b;
-    .util.gw.ID;
-    count select from qq where null returned, not discard;
-    count select from qq where null submitted, null returned, not discard;
-    count .util.gw.results;
-    count done;
-    \`long\$sum done\`error;
-    \`long\$sum qq\`discard;
-    count win;
-    winMin; histMin;
-    prc[tk;0.5]; prc[tk;0.95]; prc[tk;0.99];
-    \$[count tk; last tk; 0n]; \$[count tk; avg tk; 0n];
-    tk;
-    prc[wt;0.5]; prc[wt;0.95]; prc[wt;0.99];
-    \$[count wt; last wt; 0n]; \$[count wt; avg wt; 0n];
-    wt;
-    byType; servers; srvSummary; recent; slowest; series; backlog; errByClass; byClient; fanoutSplit;
-    now; hasET)
- }[${nRecent};${nSlow};${winMin};${histMin}]`;
 
 const num = (v) => (v == null || Number.isNaN(v) ? null : Number(v));
 const iso = (v) => (v instanceof Date ? v.toISOString() : v == null ? null : String(v));
@@ -107,23 +53,31 @@ class QueryMonReader {
     // cumulative totals, so per-backend q/s + busy% need diffing two snapshots.
     // name -> { asOfMs, byHandle: Map(handle -> { querycount, usageMs }) }
     this._prevServers = new Map();
-    // one reconnecting session per gateway target (main = gw0, mon = mon_gw)
+    // one pooled async QGateway per watched target (main = gw0, mon = mon_gw,
+    // plus every module HDB/gw configured in queryMonTargets) - same wire
+    // protocol as eqOhlc.js/calendar.js's readers, not a bespoke sync session.
     this.targets = Object.entries(cfg.targets || {}).map(([name, t]) => ({
       name,
-      session: new QSession({
+      gateway: new QGateway({
         host: t.host, port: t.port, user: t.user, password: t.password,
-        timeoutMs: this.timeoutMs, reconnectMs: 2000, label: `querymon:${name}`,
+        poolSize: Math.max(1, t.poolSize || 2),
+        queryTimeoutMs: this.timeoutMs,
+        useBigInt: t.useBigInt,
       }),
     }));
   }
 
-  start() { for (const t of this.targets) t.session.start(); return this; }
-  async stop() { await Promise.all(this.targets.map((t) => t.session.stop())); }
+  start() { for (const t of this.targets) t.gateway.start(); return this; }
+  async stop() { await Promise.all(this.targets.map((t) => t.gateway.stop())); }
 
   status() {
     return {
       enabled: this.enabled,
-      targets: this.targets.map((t) => ({ name: t.name, target: t.session.target, connected: t.session.connected })),
+      targets: this.targets.map((t) => ({
+        name: t.name,
+        target: `${t.gateway.opts.host}:${t.gateway.opts.port}`,
+        connected: t.gateway.readyCount() > 0,
+      })),
     };
   }
 
@@ -140,11 +94,11 @@ class QueryMonReader {
   }
 
   async _one(t) {
-    const base = { name: t.name, target: t.session.target };
-    if (!t.session.connected) return { ...base, connected: false, hasGw: false, error: "not connected" };
+    const base = { name: t.name, target: `${t.gateway.opts.host}:${t.gateway.opts.port}` };
+    if (t.gateway.readyCount() === 0) return { ...base, connected: false, hasGw: false, error: "not connected" };
     let d;
     try {
-      d = await t.session.sync(SNAP(this.recent, this.slow, this.winMin, this.histMin), { timeoutMs: this.timeoutMs });
+      ({ data: d } = await t.gateway.mon(this.recent, this.slow, this.winMin, this.histMin));
     } catch (e) {
       return { ...base, connected: true, hasGw: false, error: e.message || String(e) };
     }

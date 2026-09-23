@@ -1,18 +1,36 @@
 "use strict";
 
-const { QSession } = require("./qSession");
+const { QGateway } = require("./qGateway");
 const { toRows } = require("./qshape");
 
 // fxStreet economic-calendar archive (C:/data/calendar, schemas/schema_calendar.q
-// - the `econCal` table) fronted by calendar_hdb (cfg_proc/modules/calendar/hdb.json,
-// port 5078) for the eFX > Economic Calendar page. ~204k rows spanning 2010-01
-// through whatever econCalScraper last scraped (see modules/ingest/calendar/README.md);
-// a plain date-range + optional country/importance/category filter, range capped
-// to maxRangeDays so a fat-fingered multi-year request can't pull the whole archive
-// through one call. Every request also gets the archive's real min/max date back
-// (a near-free query - selecting only the virtual `date` column off a partitioned
-// table returns one row per partition, not per record) so the frontend's range
-// picker can clamp to what's actually there instead of a guessed constant.
+// - the `econCal` table) for the eFX > Economic Calendar page. ~204k rows
+// spanning 2010-01 through whatever econCalScraper last scraped (see
+// modules/ingest/calendar/README.md); a plain date-range + optional
+// country/importance/category filter, range capped to maxRangeDays so a
+// fat-fingered multi-year request can't pull the whole archive through one
+// call. Every request also gets the archive's real min/max date back (a
+// near-free query - selecting only the virtual `date` column off a
+// partitioned table returns one row per partition, not per record) so the
+// frontend's range picker can clamp to what's actually there instead of a
+// guessed constant.
+//
+// Routed through openQ's own gw (calendar_gw, cfg_proc/modules/calendar/
+// gw.json, default 127.0.0.1:5124) rather than connecting straight to
+// calendar_hdb (:5078) - requested purely for benchmarking/visibility
+// (System > Query Mon), not to fix a real gap the way the eq/fx yfinance
+// switch did: econCal is a pure batch-scraped archive with no live feed and
+// no RDB at all, ever, so there's no "today" leg to gain here. calendar_gw's
+// rdbaddr and hdbaddr both point at calendar_hdb itself (there being no
+// real rdb) - .util.servers.add recognises the address is already open and
+// registers just the one connection, tagged `hdb` (confirmed live: only a
+// single `hdb`-tagged row in .util.gw.servers, no phantom idle `rdb` one).
+// The actual query logic lives server-side now too: .oq.query.econCal
+// (modules/ingest/calendar/q/query.q, loaded on calendar_hdb) is the exact
+// same lambda that used to be built as a raw string here and sent over a
+// direct QSession every request; .oq.gw.econCal (openQ core/gw.q) is the
+// thin gw client entry point that dispatches it, HDB-only (see its own
+// header - same reasoning as .oq.gw.symRoster, different cause).
 
 const qDate = (iso) => {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || "").trim());
@@ -35,47 +53,39 @@ const qSymList = (arr) => {
   return "`$(" + clean.map((s) => JSON.stringify(s)).join(";") + ")";
 };
 
-const QUERY = (sD, eD, countries, importances, categories) => `
-{[sD;eD;ctys;imps;cats]
-  bounds:select minDate:min date, maxDate:max date from select date from econCal;
-  t:select date,time,country,currency,category,event,importance,
-      actual,consensus,previous,revised,unit,potency,
-      allDay,tentative,preliminary,report,speech,eventId
-    from econCal where date within (sD;eD);
-  if[count ctys; t:select from t where country in ctys];
-  if[count imps; t:select from t where importance in imps];
-  if[count cats; t:select from t where category in cats];
-  \`minDate\`maxDate\`rows!(first bounds\`minDate; first bounds\`maxDate; \`date\`time xasc t)
- }[${sD};${eD};${qSymList(countries)};${qSymList(importances)};${qSymList(categories)}]`;
-
 class EconCalendarReader {
   constructor(opts) {
     this.enabled = opts.enabled !== false;
     this.maxRangeDays = Math.max(1, opts.maxRangeDays || 62);
     this.timeoutMs = Math.max(3000, opts.timeoutMs || 15000);
-    this.session = new QSession({
+    this.gateway = new QGateway({
       host: opts.host,
       port: opts.port,
       user: opts.user,
       password: opts.password,
-      timeoutMs: this.timeoutMs,
-      reconnectMs: 2000,
-      label: "calendar-hdb",
+      poolSize: Math.max(1, opts.poolSize || 2),
+      queryTimeoutMs: this.timeoutMs,
+      useBigInt: opts.useBigInt,
     });
   }
 
-  start() { this.session.start(); return this; }
-  async stop() { await this.session.stop(); }
-  get connected() { return this.session.connected; }
+  start() { this.gateway.start(); return this; }
+  async stop() { await this.gateway.stop(); }
+  get connected() { return this.gateway.readyCount() > 0; }
 
   status() {
-    return { enabled: this.enabled, target: this.session.target, connected: this.session.connected };
+    return {
+      enabled: this.enabled,
+      target: `${this.gateway.opts.host}:${this.gateway.opts.port}`,
+      connected: this.connected,
+      gw: this.gateway.status(),
+    };
   }
 
   _requireUp() {
-    if (!this.session.connected) {
+    if (!this.connected) {
       const e = new Error(
-        `calendar_hdb not reachable at ${this.session.target} - start it ` +
+        `calendar_gw not reachable at ${this.gateway.opts.host}:${this.gateway.opts.port} - start it ` +
           `(scripts/startStop/startupAllByModule.sh calendar)`
       );
       e.statusCode = 503;
@@ -137,9 +147,9 @@ class EconCalendarReader {
     const categories = String(query.category || "").split(",").map((s) => s.trim()).filter(Boolean);
 
     const started = Date.now();
-    const d = await this.session.sync(QUERY(lo, hi, countries, importances, categories), {
-      timeoutMs: this.timeoutMs,
-    });
+    const { data: d } = await this.gateway.econCal(
+      lo, hi, qSymList(countries), qSymList(importances), qSymList(categories)
+    );
 
     const rows = this._rows(d.rows).map((r) => ({
       date: dstr(r.date),
@@ -165,7 +175,7 @@ class EconCalendarReader {
 
     return {
       connected: true,
-      target: this.session.target,
+      target: `${this.gateway.opts.host}:${this.gateway.opts.port}`,
       computedMs: Date.now() - started,
       meta: {
         start: dstr(lo.replace(/\./g, "-")),

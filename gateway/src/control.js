@@ -150,7 +150,13 @@ class ControlManager {
   }
 
   async _script(op, stepLabel, scriptName, scriptArgs = [], extraEnv = {}) {
-    const script = path.join(this.scripts, scriptName);
+    // every script this calls (shutdown*.sh, startup*.sh) actually lives
+    // under scripts/startStop/, not scripts/ itself - this.scripts stays
+    // pointed at scripts/ because this.logDir is derived from it and
+    // scripts/logs/ is real. Every module start/stop/restart op on the
+    // Control page was a silent no-op ("missing script") until this was
+    // fixed - confirmed by ls'ing scripts/ vs scripts/startStop/.
+    const script = path.join(this.scripts, "startStop", scriptName);
     if (!fs.existsSync(script)) {
       op.steps.push({ step: stepLabel, ok: false, note: `missing: ${script}` });
       return { code: -1, output: `missing script ${script}` };

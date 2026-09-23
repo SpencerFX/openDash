@@ -103,6 +103,10 @@ class HdbHealthReader extends CepReader {
     // carry rows for tables the source shouldn't surface (an over-broad
     // early scan), so filter the reader's output down to `only` when set.
     this.only = opts.only && opts.only.length ? new Set(opts.only) : null;
+    // optional per-source tab blacklist - the inverse of `only`: hide a few
+    // named tabs (e.g. a table dropped from the underlying HDB) without
+    // having to enumerate every other tab that should keep showing.
+    this.exclude = opts.exclude && opts.exclude.length ? new Set(opts.exclude) : null;
     this._cache = { at: 0, data: null };
     this._inflight = null;
   }
@@ -302,6 +306,11 @@ class HdbHealthReader extends CepReader {
       monthlyOut = monthly.filter((m) => this.only.has(m.tab));
       recentOut = recent.filter((x) => this.only.has(x.tab));
     }
+    if (this.exclude) {
+      tables = tables.filter((t) => !this.exclude.has(t.tab));
+      monthlyOut = monthlyOut.filter((m) => !this.exclude.has(m.tab));
+      recentOut = recentOut.filter((x) => !this.exclude.has(x.tab));
+    }
 
     const oldest = tables.map((t) => t.oldestDate).filter(Boolean).sort()[0] || null;
     const newest = tables.map((t) => t.newestDate).filter(Boolean).sort().slice(-1)[0] || null;
@@ -439,7 +448,7 @@ class HdbHealthManager {
     this.readers = new Map();
     this.meta = [];
     for (const s of cfg.sources) {
-      const opts = { host: s.host, port: s.port, timeoutMs: cfg.timeoutMs, tabs: s.tabs || null, boundDays: s.boundDays || null, only: s.only || null };
+      const opts = { host: s.host, port: s.port, timeoutMs: cfg.timeoutMs, tabs: s.tabs || null, boundDays: s.boundDays || null, only: s.only || null, exclude: s.exclude || null };
       this.readers.set(s.name, s.kind === "archive" ? new HdbHealthReader(opts) : new LiveHdbReader(opts));
       this.meta.push({ name: s.name, kind: s.kind, target: `${s.host}:${s.port}` });
     }

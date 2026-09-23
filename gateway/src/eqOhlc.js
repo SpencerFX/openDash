@@ -1,34 +1,50 @@
 "use strict";
 
-const { QSession } = require("./qSession");
+const { QGateway } = require("./qGateway");
 
-// Minute-bar OHLCV for the EQ Charts page, read straight off the equities
-// HDB (eq_hdb, default 127.0.0.1:5090 - cfg_proc/modules/eq/hdb.json,
-// hdbroot C:/data/db1/eq). One table: `eq_m1_yfinance` (1-minute bars for
-// Asian equities - HKEX + Tokyo/Nikkei). Read-only; the HDB is loaded by a
-// separate loader, openQ never writes it.
+// Minute-bar OHLCV for the EQ Charts page, read through openQ's own
+// rdb+hdb-federating gateway for this ingest module (eq_m1_yfinance_gw,
+// default 127.0.0.1:5119 - cfg_proc/modules/yfinance/eq_m1_yfinance/gw.json,
+// routing to eq_m1_yfinance_rdb :5061 + eq_m1_yfinance_hdb :5063, hdbroot
+// C:/data/db1/eq). One table: `eq_m1_yfinance` (1-minute bars for Asian
+// equities - HKEX + Tokyo/Nikkei). Read-only; the tables are loaded by a
+// separate ingest pipeline, openQ never writes them.
+//
+// This used to connect straight to the read-only eq_hdb (:5090, HDB-only -
+// no rdb component), which meant the Charts page was blind to today's live
+// intraday bars until the next EOD promote. Routing through the module's
+// own gw fixes that for free: .oq.gw.query/.oq.gw.symRoster (openQ
+// core/gw.q) pick rdb, hdb, or both per the requested time range (see
+// .oq.gw.chooseServers) and join the results, so "today so far" now shows
+// up immediately. It also means this reader's query activity is visible in
+// System > Query Mon (config.js wires eq_m1_yfinance_gw/fx_m1_yfinance_gw
+// in as extra queryMon targets) instead of being invisible direct IPC.
 //
 // Also drives the eFX Charts page in the exact same shape: same reader
-// class, pointed at fx_hdb (cfg_proc/modules/fx/hdb.json, hdbroot
-// C:/data/db1/efx) for the `fx_m1_yfinance` table (1-minute spot bars, 28
-// G10 pairs from yfinance). Only the target/table and a couple of
-// error-message strings differ - see opts.hdbName / opts.startHint.
+// class, pointed at fx_m1_yfinance_gw (cfg_proc/modules/yfinance/
+// fx_m1_yfinance/gw.json, default 127.0.0.1:5123) for the `fx_m1_yfinance`
+// table (1-minute spot bars, 28 G10 pairs from yfinance). Only the
+// target/table and a couple of error-message strings differ - see
+// opts.hdbName / opts.startHint.
 //
 // Two calls:
 //   syms()          -> the symbol universe + its exchange, from the
 //                      newest partition (cached, symbol picker feeds off it)
-//   bars(sym, days) -> that symbol's minute bars over the last `days`
-//                      partitions, shaped { t, o, h, l, c, v } for the
-//                      dashboard's <LwCandles> (same shape as /api/ohlc)
+//   bars(sym, days) -> that symbol's minute bars over roughly the last
+//                      `days` trading days plus everything so far today,
+//                      shaped { t, o, h, l, c, v } for the dashboard's
+//                      <LwCandles> (same shape as /api/ohlc)
 //
-// The HDB is not always running - for eq, start it from System > Control
-// (the `eq` module) or `scripts/startStop/startupAllByModule.sh eq`; for
-// fx, `scripts/startStop/startupAllByModule.sh fx`. Every call fails soft
-// with a 503 when it's down.
+// The gw is not always running - start it with
+// `scripts/startStop/startupAllByModule.sh eq_m1_yfinance` (eq) or
+// `... fx_m1_yfinance` (fx), which bring up that module's whole tp/rdb/hdb/
+// idb/gw/housekeeping stack. Every call fails soft with a 503 when it's down.
 
 // Yahoo tickers: digits + letters + '.' + '-' (e.g. 0005.HK, 7203.T,
-// BRK-B). qlit.symbolLit rejects the dot / leading digit, so the query
-// uses `$"<sym>" and this regex is the whole guard against injection.
+// BRK-B) - qlit.symbolLit's bare-backtick-token rules reject the leading
+// digit / dot / hyphen, so gateway.query() passes `sym` as `yahooSym`,
+// which qlit.buildGwQuery renders via yahooSymbolLit's `$"<sym>"` cast form
+// instead. This regex is what actually guards against injection either way.
 const SYM_RE = /^[0-9A-Za-z.\-]{1,14}$/;
 // Short TTL so a newly-loaded exchange / partition shows up in the symbol
 // picker within a minute rather than up to 5 - the query is one grouped
@@ -41,39 +57,48 @@ class EqOhlcReader {
   constructor(opts) {
     this.table = opts.table || "eq_m1_yfinance";
     this.maxDays = opts.maxDays || 21;
-    this.hdbName = opts.hdbName || "eq_hdb";
-    this.startHint = opts.startHint || 'the "eq" module from System > Control';
-    this.session = new QSession({
+    this.hdbName = opts.hdbName || "eq_m1_yfinance_gw";
+    this.startHint = opts.startHint || 'the "eq_m1_yfinance" module from System > Control';
+    this.timeoutMs = opts.timeoutMs || 15000;
+    this.gateway = new QGateway({
       host: opts.host,
       port: opts.port,
-      timeoutMs: opts.timeoutMs || 15000,
-      reconnectMs: 2000,
-      label: opts.label || "eq-hdb",
+      user: opts.user,
+      password: opts.password,
+      poolSize: Math.max(1, opts.poolSize || 2),
+      queryTimeoutMs: this.timeoutMs,
+      useBigInt: opts.useBigInt,
     });
     this._syms = { at: 0, data: null };
-    // warm the symbol cache on (re)connect so /health symCount and the
-    // per-bars exchange lookup are populated without waiting for /api/eq/syms
-    this.session.on("connect", () => { this.syms().catch(() => {}); });
   }
 
-  start() { this.session.start(); return this; }
-  async stop() { await this.session.stop(); }
+  start() {
+    this.gateway.start().then(({ connected }) => {
+      // warm the symbol cache once a slot is up, so /health symCount and the
+      // per-bars exchange lookup are populated without waiting for the first
+      // /api/eq/syms hit; harmless no-op if it's still down (connected=0).
+      if (connected) this.syms().catch(() => {});
+    });
+    return this;
+  }
+  async stop() { await this.gateway.stop(); }
 
-  get connected() { return this.session.connected; }
+  get connected() { return this.gateway.readyCount() > 0; }
 
   status() {
     return {
       enabled: true,
-      target: this.session.target,
-      connected: this.session.connected,
+      target: `${this.gateway.opts.host}:${this.gateway.opts.port}`,
+      connected: this.connected,
       table: this.table,
       symCount: this._syms.data ? this._syms.data.count : null,
+      gw: this.gateway.status(),
     };
   }
 
   _requireUp() {
-    if (!this.session.connected) {
-      const e = new Error(`${this.hdbName} not reachable at ${this.session.target} - start ${this.startHint}`);
+    if (!this.connected) {
+      const e = new Error(`${this.hdbName} not reachable at ${this.gateway.opts.host}:${this.gateway.opts.port} - start ${this.startHint}`);
       e.statusCode = 503;
       throw e;
     }
@@ -82,14 +107,14 @@ class EqOhlcReader {
   // ~6.4k rows: one { sym, exchange } per symbol present in the newest
   // partition THAT ACTUALLY HAS ROWS - not `max date`, which after
   // core/hdb.q's .Q.chk can be an empty `eq_m1_yfinance` stub in a
-  // partition that only really holds `eq_d1_yfinance`. Cached SYM_TTL_MS.
+  // partition that only really holds `eq_d1_yfinance`. That gap-safe
+  // max-date lookup plus the by-sym aggregation now lives server-side in
+  // .oq.query.symRoster (openQ core/query.q), called through the gw via
+  // .oq.gw.symRoster - see qGateway.js. Cached SYM_TTL_MS.
   async syms() {
     if (this._syms.data && Date.now() - this._syms.at < SYM_TTL_MS) return this._syms.data;
     this._requireUp();
-    const q =
-      `0!\`sym xasc select exchange:last exchange by sym from ${this.table} ` +
-      `where date=(exec max date from select date from ${this.table})`;
-    const res = await this.session.sync(q, { timeoutMs: 20000 });
+    const { data: res } = await this.gateway.symRoster(this.table);
     const syms = [];
     const byExch = {};
     if (res && Array.isArray(res.sym)) {
@@ -124,15 +149,22 @@ class EqOhlcReader {
     const days = Math.max(1, Math.min(this.maxDays, Math.trunc(Number(daysRaw) || 3)));
     this._requireUp();
     if (!this._syms.data) await this.syms().catch(() => {});
-    // the last `days` dates that actually have rows for this table (not
-    // .Q.pv, which can include an empty .Q.chk stub partition); d0 bracketed
-    // so the index math can't parse as a subtraction.
-    const q =
-      `{[n;s] pv:asc exec distinct date from select date from ${this.table}; ` +
-      `d0:pv (0|(count pv)-n); ` +
-      `select barTime, open, high, low, close, volume from ${this.table} ` +
-      `where date>=d0, sym=s}[${days};\`$"${sym}"]`;
-    const res = await this.session.sync(q, { timeoutMs: this.session.timeoutMs });
+    // .oq.gw.query takes a plain calendar sTime/eTime bound, not "the last N
+    // POPULATED dates" (what this reader used to compute itself against a
+    // direct IPC connection - core/query.q's .oq.query.root has no such
+    // concept). Pad the window ~1.6x + 2 days so weekends/holidays inside it
+    // still leave at least `days` real trading days in view; `end` is left
+    // unset so qlit.js materialises it as an always-future edge timestamp,
+    // which .oq.gw.chooseServers reads as "reaches into today" - so the rdb
+    // leg is queried too and today's bars-so-far show up immediately.
+    const calDays = Math.ceil(days * 1.6) + 2;
+    const start = new Date(Date.now() - calDays * 86400000);
+    const { data: res } = await this.gateway.query({
+      table: this.table,
+      columns: ["barTime", "open", "high", "low", "close", "volume"],
+      start,
+      yahooSym: sym,
+    });
     const bt = (res && res.barTime) || [];
     const bars = new Array(bt.length);
     for (let i = 0; i < bt.length; i++) {

@@ -102,7 +102,7 @@ const defaultTarget = Object.keys(targets)[0];
 // Same "name=host:port,..." format; falls back to the /api/query targets.
 function parseQueryMonTargets() {
   const raw = str("OPENQ_QUERYMON_TARGETS", "");
-  if (!raw) return targets;
+  if (!raw) return { ...targets };
   const out = {};
   for (const part of raw.split(",")) {
     const [name, hostport] = part.split("=").map((s) => (s || "").trim());
@@ -110,9 +110,69 @@ function parseQueryMonTargets() {
     const [h, p] = hostport.split(":");
     out[name] = { ...gwBase, host: h || "127.0.0.1", port: Number(p) || 5013 };
   }
-  return Object.keys(out).length ? out : targets;
+  return Object.keys(out).length ? out : { ...targets };
 }
 const queryMonTargets = parseQueryMonTargets();
+
+// eq_m1_yfinance_gw / fx_m1_yfinance_gw - openQ's own dedicated rdb+hdb-
+// federating gateways for the yfinance ingest tables. eqOhlc.js's EQ/eFX
+// Charts readers route through these (instead of connecting straight to the
+// read-only eq_hdb/fx_hdb) so today's live bars show up and their query
+// traffic is visible somewhere. calendar_gw is the same idea for a different
+// reason - econCal has no live/RDB leg at all, ever, so it's routed through
+// its own gw purely for System > Query Mon visibility/benchmarking (user
+// request), not to fix a real gap. All three wire their traffic into both
+// /api/query and System > Query Mon *unconditionally* (appended after each
+// target dict is built, not folded into either parser's env-string format
+// above), since OPENQ_GW_TARGETS / OPENQ_QUERYMON_TARGETS may already be set
+// to something else entirely and Query Mon's "falls back to /api/query
+// targets" only applies when its own env var is unset. One shared
+// {host,port} per table/reader feeds the target dicts AND the eq/fx/calendar
+// reader configs below, so they can never drift apart. Override with
+// OPENQ_EQ_GW / OPENQ_FX_GW / OPENQ_CALENDAR_GW, or disable one with
+// off/none/0 (this only affects whether it's registered as a standalone
+// /api/query + Query Mon target and where the reader connects - each page
+// itself is switched off by its own OPENQ_*_HDB=off, unrelated to this).
+function moduleGwAddr(envVar, defaultHostPort) {
+  const hp = str(envVar, defaultHostPort);
+  if (!hp || /^(off|none|0|false)$/i.test(hp)) return null;
+  const [h, p] = hp.split(":");
+  return { host: h || "127.0.0.1", port: Number(p) || 0 };
+}
+const eqGwAddr = moduleGwAddr("OPENQ_EQ_GW", "127.0.0.1:5119");
+const fxGwAddr = moduleGwAddr("OPENQ_FX_GW", "127.0.0.1:5123");
+const calendarGwAddr = moduleGwAddr("OPENQ_CALENDAR_GW", "127.0.0.1:5124");
+// retailR_gw (cfg_proc/modules/retailR/gw.json, routes to retailR_hdb :5079
+// - same address twice, no real rdb, same trick as calendarGwAddr) - the
+// Broker Tech suite's own gw, same rationale as calendar_gw: a pure batch
+// analytics HDB, no live feed, no RDB leg ever, migrated purely for System
+// > Query Mon visibility/benchmarking (user request).
+const brokerTechGwAddr = moduleGwAddr("OPENQ_BROKERTECH_GW", "127.0.0.1:5125");
+// traderTools rides the same retailR_gw process as brokerTech (same HDB,
+// same port 5125 default) - a separate env var anyway, matching every
+// other module's own independent override, even though today it resolves
+// to the identical address.
+const traderToolsGwAddr = moduleGwAddr("OPENQ_TRADERTOOLS_GW", "127.0.0.1:5125");
+for (const [name, addr] of [
+  ["eq_yfinance_gw", eqGwAddr],
+  ["fx_yfinance_gw", fxGwAddr],
+  ["calendar_gw", calendarGwAddr],
+  ["brokertech_gw", brokerTechGwAddr],
+  ["tradertools_gw", traderToolsGwAddr],
+]) {
+  if (!addr) continue;
+  targets[name] = { ...gwBase, ...addr };
+  // Query Mon polls every queryMonTargets entry independently, and each poll
+  // is itself logged as a query in the polled process's own .util.gw.queue -
+  // so two names sharing one physical address (brokertech_gw / tradertools_gw
+  // both default to retailR_gw :5125) silently double that process's own
+  // query count/qps for no benefit, purely from being monitored twice.
+  // Dedupe queryMonTargets by host:port; `targets` (the /api/query page's
+  // own list) keeps both names, since a distinct routing label there is
+  // still useful even when the backend happens to be the same process.
+  const alreadyPolled = Object.values(queryMonTargets).some((t) => t.host === addr.host && t.port === addr.port);
+  if (!alreadyPolled) queryMonTargets[name] = { ...gwBase, ...addr };
+}
 
 const config = {
   port: int("PORT", 8080),
@@ -443,6 +503,12 @@ const config = {
             { name: "tableHealthTick", kind: "tick" },
             { name: "tableHealthFxYf", kind: "bar" },
           ],
+          // fx_tick_dukasCopy was dropped from efx (2026-09-17, was an
+          // empty schema-only stub across every partition, never actually
+          // populated) - its historical archive rows stay in tableHealthTick
+          // (an append-only scan log), so hide the tab here rather than
+          // trying to purge the archive.
+          exclude: ["fx_tick_dukasCopy"],
         });
       // futures/rates/ta HDB: the `tableHealth<Name>` archive that
       // 05_table_health_scan.q writes into the /mon root (served by mon_hdb,
@@ -641,89 +707,135 @@ const config = {
     };
   })(),
 
-  // retailR_hdb (cfg_proc/modules/retailR/hdb.json, port 5079, hdbroot
-  // C:/data/r) with modules/analytics/brokerTech/{brokerTech,
-  // brokerTechSourceR}.q loaded on it - the retail FX/CFD broker risk
-  // analytics for the "Broker Tech" page (/api/brokertech). Two platforms
-  // (mql5.com Signals + myfxbook.com) merged - see brokerTech.js's own
-  // header and brokerTechSourceR.q for how. Set OPENQ_BROKERTECH_HDB to
-  // 127.0.0.1:5077 to point back at the original single-platform
-  // brokerTech_hdb (cfg_proc/modules/brokerTech/hdb.json, hdbroot
-  // C:/data/retail) instead - same reader, same query shape, no code
-  // change needed either way. The whole .brk.* suite is a batch recompute
-  // over a date window, so the reader caches per (lookbackDays,minTrades,
-  // top) for OPENQ_BROKERTECH_TTL_MS. off/none/0 disables.
+  // retailR_gw (cfg_proc/modules/retailR/gw.json, default 127.0.0.1:5125,
+  // routing to retailR_hdb :5079 - see brokerTechGwAddr above) rather than
+  // retailR_hdb directly - the retail FX/CFD broker risk analytics for the
+  // "Broker Tech" page suite (/api/brokertech*). Two platforms (mql5.com
+  // Signals + myfxbook.com) merged - see brokerTech.js's own header and
+  // brokerTechSourceR.q for how. host:port comes from brokerTechGwAddr
+  // (OPENQ_BROKERTECH_GW) - deliberately NOT OPENQ_BROKERTECH_HDB, which is
+  // pinned to retailR_hdb :5079 directly and predates the gw (same reasoning
+  // as calendar's OPENQ_CALENDAR_HDB vs OPENQ_CALENDAR_GW). Point
+  // OPENQ_BROKERTECH_HDB at 127.0.0.1:5077 to switch which underlying HDB
+  // modules/analytics/brokerTech/api.q's functions run against (the legacy
+  // single-platform brokerTech_hdb, cfg_proc/modules/brokerTech/hdb.json,
+  // hdbroot C:/data/retail) - that var is now read only by nothing in this
+  // file (it has no gw of its own yet); left for a future migration. The
+  // whole .brk.* suite is a batch recompute over a date window, so the
+  // reader caches per (lookbackDays,minTrades,top) for OPENQ_BROKERTECH_TTL_MS.
+  // brokerTechGwAddr null (OPENQ_BROKERTECH_GW=off/none/0) disables the page.
   brokerTech: (function () {
-    const hp = str("OPENQ_BROKERTECH_HDB", "127.0.0.1:5079");
-    if (!hp || /^(off|none|0|false)$/i.test(hp)) return { enabled: false };
-    const [h, p] = hp.split(":");
+    if (!brokerTechGwAddr) return { enabled: false };
     return {
       enabled: true,
-      host: h || "127.0.0.1",
-      port: Number(p) || 5079,
-      lookbackDays: Math.max(1, int("OPENQ_BROKERTECH_LOOKBACK_DAYS", 90)),
+      host: brokerTechGwAddr.host,
+      port: brokerTechGwAddr.port,
+      poolSize: Math.max(1, int("OPENQ_BROKERTECH_POOL_SIZE", 2)),
+      lookbackDays: Math.max(1, int("OPENQ_BROKERTECH_LOOKBACK_DAYS", 30)),
       minTrades: Math.max(0, int("OPENQ_BROKERTECH_MIN_TRADES", 10)),
       topN: Math.max(3, int("OPENQ_BROKERTECH_TOP", 15)),
       ttlMs: Math.max(5000, int("OPENQ_BROKERTECH_TTL_MS", 60000)),
-      timeoutMs: Math.max(cepTimeoutMs, int("OPENQ_BROKERTECH_TIMEOUT_MS", 45000)),
+      // 90s not 45s: the "Predicted Time of Trading" dashboard's combined
+      // .brk.hourly.dashboard call profiles at ~30s on a cold disk cache
+      // (a single full-history scan shared across its 4 panels - see
+      // brokertech_dashboard.md) - 45s left too little margin and produced
+      // real 504s, especially for historical dates the reader's cache
+      // never held.
+      timeoutMs: Math.max(cepTimeoutMs, int("OPENQ_BROKERTECH_TIMEOUT_MS", 90000)),
     };
   })(),
 
-  // econCal HDB (calendar_hdb, cfg_proc/modules/calendar/hdb.json, port
-  // 5078, hdbroot C:/data/calendar) - fxStreet economic-calendar events
-  // (2010-> , ~204k rows, modules/ingest/calendar/) for the eFX > Economic
-  // Calendar page (/api/calendar). Default 127.0.0.1:5078; off/none/0
-  // disables. maxRangeDays caps how wide a single start/end request can be
-  // (a fat-fingered multi-year range shouldn't pull the whole archive).
-  calendar: (function () {
-    const hp = str("OPENQ_CALENDAR_HDB", "127.0.0.1:5078");
-    if (!hp || /^(off|none|0|false)$/i.test(hp)) return { enabled: false };
-    const [h, p] = hp.split(":");
+  // traderTools, via retailR_gw (same process/port as brokerTech above) -
+  // per-account trade analytics (/api/tradertools*): one account's equity
+  // curve, drawdown, holding-period/instrument mix, time-of-day pattern,
+  // martingale ratio and first-half/second-half persistence
+  // (.oq.tt.api.*, modules/analytics/traderTools/api.q). Same "pure batch
+  // analytics HDB" rationale as brokerTech/econCal - no live feed, no RDB
+  // leg. traderToolsGwAddr null (OPENQ_TRADERTOOLS_GW=off/none/0) disables
+  // the page.
+  traderTools: (function () {
+    if (!traderToolsGwAddr) return { enabled: false };
     return {
       enabled: true,
-      host: h || "127.0.0.1",
-      port: Number(p) || 5078,
+      host: traderToolsGwAddr.host,
+      port: traderToolsGwAddr.port,
+      poolSize: Math.max(1, int("OPENQ_TRADERTOOLS_POOL_SIZE", 2)),
+      lookbackDays: Math.max(1, int("OPENQ_TRADERTOOLS_LOOKBACK_DAYS", 365)),
+      minTrades: Math.max(0, int("OPENQ_TRADERTOOLS_MIN_TRADES", 10)),
+      topN: Math.max(3, int("OPENQ_TRADERTOOLS_TOP", 200)),
+      ttlMs: Math.max(5000, int("OPENQ_TRADERTOOLS_TTL_MS", 60000)),
+      timeoutMs: Math.max(cepTimeoutMs, int("OPENQ_TRADERTOOLS_TIMEOUT_MS", 90000)),
+    };
+  })(),
+
+  // econCal, via calendar_gw (cfg_proc/modules/calendar/gw.json, default
+  // 127.0.0.1:5124, routing to calendar_hdb :5078 - see moduleGwAddr above)
+  // rather than calendar_hdb directly - fxStreet economic-calendar events
+  // (2010-> , ~204k rows, modules/ingest/calendar/) for the eFX > Economic
+  // Calendar page (/api/calendar). host:port comes from calendarGwAddr
+  // (OPENQ_CALENDAR_GW) - deliberately NOT OPENQ_CALENDAR_HDB, which is
+  // pinned to calendar_hdb :5078 directly and predates the gw. maxRangeDays
+  // caps how wide a single start/end request can be (a fat-fingered
+  // multi-year range shouldn't pull the whole archive).
+  calendar: (function () {
+    if (!calendarGwAddr) return { enabled: false };
+    return {
+      enabled: true,
+      host: calendarGwAddr.host,
+      port: calendarGwAddr.port,
+      poolSize: Math.max(1, int("OPENQ_CALENDAR_POOL_SIZE", 2)),
       maxRangeDays: Math.max(1, int("OPENQ_CALENDAR_MAX_RANGE_DAYS", 62)),
       timeoutMs: Math.max(cepTimeoutMs, int("OPENQ_CALENDAR_TIMEOUT_MS", 15000)),
     };
   })(),
 
-  // the equities HDB (eq_hdb, cfg_proc/modules/eq/hdb.json, hdbroot
-  // C:/data/db1/eq) - minute bars `eq_m1_yfinance` for the EQ > Charts
-  // page. Default 127.0.0.1:5090; set OPENQ_EQ_HDB to off/none/0 to disable.
+  // eq_m1_yfinance_gw (cfg_proc/modules/yfinance/eq_m1_yfinance/gw.json,
+  // routes to eq_m1_yfinance_rdb :5061 + eq_m1_yfinance_hdb :5063, hdbroot
+  // C:/data/db1/eq) - minute bars `eq_m1_yfinance` for the EQ > Charts page,
+  // via EqOhlcReader/QGateway (openQ's own .oq.gw.query/.oq.gw.symRoster, see
+  // eqOhlc.js) rather than a direct HDB-only connection - so the page also
+  // shows today's live bars, and its query traffic shows up in Query Mon.
+  // host:port comes from eqGwAddr above (OPENQ_EQ_GW, default 127.0.0.1:5119)
+  // - deliberately NOT OPENQ_EQ_HDB, which used to point this reader at the
+  // plain read-only eq_hdb (:5090, still used by the HDB Health page) and
+  // isn't gw-shaped. eqGwAddr null (OPENQ_EQ_GW=off/none/0) disables the page.
   eq: (function () {
-    const hp = str("OPENQ_EQ_HDB", "127.0.0.1:5090");
-    if (!hp || /^(off|none|0|false)$/i.test(hp)) return { enabled: false };
-    const [h, p] = hp.split(":");
+    if (!eqGwAddr) return { enabled: false };
     return {
       enabled: true,
-      host: h || "127.0.0.1",
-      port: Number(p) || 5090,
+      host: eqGwAddr.host,
+      port: eqGwAddr.port,
       table: str("OPENQ_EQ_TABLE", "eq_m1_yfinance"),
       maxDays: Math.max(1, int("OPENQ_EQ_MAX_DAYS", 21)),
       timeoutMs: Math.max(cepTimeoutMs, int("OPENQ_EQ_TIMEOUT_MS", 15000)),
+      poolSize: Math.max(1, int("OPENQ_EQ_POOL_SIZE", 2)),
     };
   })(),
 
-  // the FX HDB (fx_hdb, cfg_proc/modules/fx/hdb.json, hdbroot
-  // C:/data/db1/efx) - minute bars `fx_m1_yfinance` (28 G10 spot pairs
-  // from yfinance) for the eFX > Charts page. Same EqOhlcReader, same
-  // /api/*/{syms,bars} shape as eq. Default 127.0.0.1:5093; set
-  // OPENQ_FX_HDB to off/none/0 to disable (the page then shows the error).
+  // fx_m1_yfinance_gw (cfg_proc/modules/yfinance/fx_m1_yfinance/gw.json,
+  // routes to fx_m1_yfinance_rdb :5141/5120 + fx_m1_yfinance_hdb :5143,
+  // hdbroot C:/data/db1/efx) - minute bars `fx_m1_yfinance` (28 G10 spot
+  // pairs from yfinance) for the eFX > Charts page. Same EqOhlcReader/
+  // QGateway wiring and /api/*/{syms,bars} shape as eq, same live-today
+  // benefit. host:port comes from fxGwAddr above (OPENQ_FX_GW, default
+  // 127.0.0.1:5123) - deliberately a NEW var, not OPENQ_FX_HDB (already
+  // pinned to the shared efx-root browse HDB :5093 for fxEventChart below,
+  // which is HDB-only and has no .util.gw.servers registered - pointing this
+  // reader there too would make every gw call fail with "not all requested
+  // server types are available"). fxGwAddr null disables the page.
   fx: (function () {
-    const hp = str("OPENQ_FX_HDB", "127.0.0.1:5093");
-    if (!hp || /^(off|none|0|false)$/i.test(hp)) return { enabled: false };
-    const [h, p] = hp.split(":");
+    if (!fxGwAddr) return { enabled: false };
     return {
       enabled: true,
-      host: h || "127.0.0.1",
-      port: Number(p) || 5093,
+      host: fxGwAddr.host,
+      port: fxGwAddr.port,
       table: str("OPENQ_FX_TABLE", "fx_m1_yfinance"),
       maxDays: Math.max(1, int("OPENQ_FX_MAX_DAYS", 30)),
       timeoutMs: Math.max(cepTimeoutMs, int("OPENQ_FX_TIMEOUT_MS", 15000)),
-      hdbName: "fx_hdb",
-      startHint: 'the "fx" module (scripts/startStop/startupAllByModule.sh fx)',
-      label: "fx-hdb",
+      poolSize: Math.max(1, int("OPENQ_FX_POOL_SIZE", 2)),
+      hdbName: "fx_m1_yfinance_gw",
+      startHint: 'the "fx_m1_yfinance" module (scripts/startStop/startupAllByModule.sh fx_m1_yfinance)',
+      label: "fx-yfinance-gw",
     };
   })(),
 
