@@ -27,6 +27,7 @@ const { EqOhlcReader } = require("./eqOhlc"); // also drives fxOhlc (same class,
 const { CandlePatternReader } = require("./candlePattern");
 const { BacktestReader } = require("./backtest");
 const { BrokerTechReader } = require("./brokerTech");
+const { TraderToolsReader } = require("./traderTools");
 const { EconCalendarReader } = require("./calendar");
 const { FxEventChartReader } = require("./fxEvent");
 const { QueryMonReader } = require("./queryMon");
@@ -177,6 +178,8 @@ function createServer() {
   const backtest = config.backtest && config.backtest.enabled ? new BacktestReader(config.backtest) : null;
   const brokerTech =
     config.brokerTech && config.brokerTech.enabled ? new BrokerTechReader(config.brokerTech) : null;
+  const traderTools =
+    config.traderTools && config.traderTools.enabled ? new TraderToolsReader(config.traderTools) : null;
   const calendar =
     config.calendar && config.calendar.enabled ? new EconCalendarReader(config.calendar) : null;
   const fxEventChart =
@@ -234,6 +237,7 @@ function createServer() {
           candlePattern: candlePattern ? candlePattern.status() : { enabled: false },
           backtest: backtest ? backtest.status() : { enabled: false },
           brokerTech: brokerTech ? brokerTech.status() : { enabled: false },
+          traderTools: traderTools ? traderTools.status() : { enabled: false },
           calendar: calendar ? calendar.status() : { enabled: false },
           fxEventChart: fxEventChart ? fxEventChart.status() : { enabled: false },
           queryMon: queryMon ? queryMon.status() : { enabled: false },
@@ -438,8 +442,8 @@ function createServer() {
         if (req.method !== "GET") return send(res, 405, { error: "use GET" });
         if (!brokerTech) {
           const e = new Error(
-            "brokerTech disabled (set OPENQ_BROKERTECH_HDB to brokerTech_hdb host:port, " +
-              "start scripts/startStop/startupAllByModule.sh brokerTech)"
+            "brokerTech disabled (set OPENQ_BROKERTECH_GW, " +
+              "start scripts/startStop/startupAllByModule.sh retailR)"
           );
           e.statusCode = 503;
           throw e;
@@ -460,8 +464,8 @@ function createServer() {
         if (req.method !== "GET") return send(res, 405, { error: "use GET" });
         if (!brokerTech) {
           const e = new Error(
-            "brokerTech disabled (set OPENQ_BROKERTECH_HDB to brokerTech_hdb host:port, " +
-              "start scripts/startStop/startupAllByModule.sh brokerTech)"
+            "brokerTech disabled (set OPENQ_BROKERTECH_GW, " +
+              "start scripts/startStop/startupAllByModule.sh retailR)"
           );
           e.statusCode = 503;
           throw e;
@@ -474,6 +478,245 @@ function createServer() {
             lookbackDays: sp.get("lookbackDays"),
             k: sp.get("k"),
             minTrades: sp.get("minTrades"),
+          })
+        );
+      }
+
+      if (url.pathname === "/api/brokertech/segments") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!brokerTech) {
+          const e = new Error(
+            "brokerTech disabled (set OPENQ_BROKERTECH_GW, " +
+              "start scripts/startStop/startupAllByModule.sh retailR)"
+          );
+          e.statusCode = 503;
+          throw e;
+        }
+        const sp = url.searchParams;
+        return send(
+          res,
+          200,
+          await brokerTech.segments({
+            lookbackDays: sp.get("lookbackDays"),
+            minTrades: sp.get("minTrades"),
+          })
+        );
+      }
+
+      if (url.pathname === "/api/brokertech/ccy") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!brokerTech) {
+          const e = new Error(
+            "brokerTech disabled (set OPENQ_BROKERTECH_GW, " +
+              "start scripts/startStop/startupAllByModule.sh retailR)"
+          );
+          e.statusCode = 503;
+          throw e;
+        }
+        const sp = url.searchParams;
+        return send(
+          res,
+          200,
+          await brokerTech.ccy({
+            lookbackDays: sp.get("lookbackDays"),
+            symbol: sp.get("symbol"),
+          })
+        );
+      }
+
+      if (url.pathname === "/api/brokertech/ssi") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!brokerTech) {
+          const e = new Error(
+            "brokerTech disabled (set OPENQ_BROKERTECH_GW, " +
+              "start scripts/startStop/startupAllByModule.sh retailR)"
+          );
+          e.statusCode = 503;
+          throw e;
+        }
+        const sp = url.searchParams;
+        return send(
+          res,
+          200,
+          await brokerTech.ssi({
+            lookbackDays: sp.get("lookbackDays"),
+            topN: sp.get("topN"),
+            symbol: sp.get("symbol"),
+          })
+        );
+      }
+
+      if (url.pathname === "/api/brokertech/mlrisk") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!brokerTech) {
+          const e = new Error(
+            "brokerTech disabled (set OPENQ_BROKERTECH_GW, " +
+              "start scripts/startStop/startupAllByModule.sh retailR)"
+          );
+          e.statusCode = 503;
+          throw e;
+        }
+        const sp = url.searchParams;
+        return send(
+          res,
+          200,
+          await brokerTech.aiRisk({
+            lookbackDays: sp.get("lookbackDays"),
+          })
+        );
+      }
+
+      if (url.pathname === "/api/brokertech/profitscore") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!brokerTech) {
+          const e = new Error(
+            "brokerTech disabled (set OPENQ_BROKERTECH_GW, " +
+              "start scripts/startStop/startupAllByModule.sh retailR)"
+          );
+          e.statusCode = 503;
+          throw e;
+        }
+        const sp = url.searchParams;
+        return send(
+          res,
+          200,
+          await brokerTech.profit({
+            lookbackDays: sp.get("lookbackDays"),
+          })
+        );
+      }
+
+      if (url.pathname === "/api/brokertech/hourly") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!brokerTech) {
+          const e = new Error(
+            "brokerTech disabled (set OPENQ_BROKERTECH_GW, " +
+              "start scripts/startStop/startupAllByModule.sh retailR)"
+          );
+          e.statusCode = 503;
+          throw e;
+        }
+        const sp = url.searchParams;
+        return send(
+          res,
+          200,
+          await brokerTech.hourly({
+            lookbackDays: sp.get("lookbackDays"),
+            lookbackWeeks: sp.get("lookbackWeeks"),
+            testDays: sp.get("testDays"),
+            zCut: sp.get("zCut"),
+            date: sp.get("date"),
+          })
+        );
+      }
+
+      if (url.pathname === "/api/brokertech/vfdt") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!brokerTech) {
+          const e = new Error(
+            "brokerTech disabled (set OPENQ_BROKERTECH_GW, " +
+              "start scripts/startStop/startupAllByModule.sh retailR)"
+          );
+          e.statusCode = 503;
+          throw e;
+        }
+        const sp = url.searchParams;
+        return send(
+          res,
+          200,
+          await brokerTech.vfdt({
+            lookbackDays: sp.get("lookbackDays"),
+          })
+        );
+      }
+
+      if (url.pathname === "/api/brokertech/churn") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!brokerTech) {
+          const e = new Error(
+            "brokerTech disabled (set OPENQ_BROKERTECH_GW, " +
+              "start scripts/startStop/startupAllByModule.sh retailR)"
+          );
+          e.statusCode = 503;
+          throw e;
+        }
+        const sp = url.searchParams;
+        return send(
+          res,
+          200,
+          await brokerTech.churn({
+            lookbackDays: sp.get("lookbackDays"),
+          })
+        );
+      }
+
+      if (url.pathname === "/api/brokertech/margin") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!brokerTech) {
+          const e = new Error(
+            "brokerTech disabled (set OPENQ_BROKERTECH_GW, " +
+              "start scripts/startStop/startupAllByModule.sh retailR)"
+          );
+          e.statusCode = 503;
+          throw e;
+        }
+        const sp = url.searchParams;
+        return send(res, 200, await brokerTech.margin({ lookbackDays: sp.get("lookbackDays"), broker: sp.get("broker") }));
+      }
+
+      if (url.pathname === "/api/brokertech/volume") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!brokerTech) {
+          const e = new Error(
+            "brokerTech disabled (set OPENQ_BROKERTECH_GW, " +
+              "start scripts/startStop/startupAllByModule.sh retailR)"
+          );
+          e.statusCode = 503;
+          throw e;
+        }
+        const sp = url.searchParams;
+        return send(res, 200, await brokerTech.volume({ lookbackDays: sp.get("lookbackDays"), broker: sp.get("broker") }));
+      }
+
+      if (url.pathname === "/api/tradertools/report") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!traderTools) {
+          const e = new Error(
+            "traderTools disabled (set OPENQ_TRADERTOOLS_GW, " +
+              "start scripts/startStop/startupAllByModule.sh retailR)"
+          );
+          e.statusCode = 503;
+          throw e;
+        }
+        const sp = url.searchParams;
+        return send(
+          res,
+          200,
+          await traderTools.report({
+            signalId: sp.get("signalId"),
+            lookbackDays: sp.get("lookbackDays"),
+          })
+        );
+      }
+
+      if (url.pathname === "/api/tradertools/roster") {
+        if (req.method !== "GET") return send(res, 405, { error: "use GET" });
+        if (!traderTools) {
+          const e = new Error(
+            "traderTools disabled (set OPENQ_TRADERTOOLS_GW, " +
+              "start scripts/startStop/startupAllByModule.sh retailR)"
+          );
+          e.statusCode = 503;
+          throw e;
+        }
+        const sp = url.searchParams;
+        return send(
+          res,
+          200,
+          await traderTools.roster({
+            lookbackDays: sp.get("lookbackDays"),
+            minTrades: sp.get("minTrades"),
+            top: sp.get("top"),
           })
         );
       }
@@ -757,6 +1000,7 @@ function createServer() {
     if (candlePattern) candlePattern.start();
     if (backtest) backtest.start();
     if (brokerTech) brokerTech.start();
+    if (traderTools) traderTools.start();
     if (calendar) calendar.start();
     if (fxEventChart) fxEventChart.start();
     if (queryMon) queryMon.start();
@@ -787,6 +1031,7 @@ function createServer() {
     if (candlePattern) await candlePattern.stop();
     if (backtest) await backtest.stop();
     if (brokerTech) await brokerTech.stop();
+    if (traderTools) await traderTools.stop();
     if (calendar) await calendar.stop();
     if (fxEventChart) await fxEventChart.stop();
     if (queryMon) await queryMon.stop();

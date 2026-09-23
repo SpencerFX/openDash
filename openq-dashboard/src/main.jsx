@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  Activity, Archive, ArrowDown, ArrowUp, BarChart3, Bell, BookText, Boxes, CalendarDays, CandlestickChart, Check,
+  Activity, Archive, ArrowDown, ArrowUp, BarChart3, Bell, BookText, Boxes, Brain, CalendarDays, CandlestickChart, Check,
   ChevronLeft, ChevronRight, CircleDollarSign, Cpu, Crosshair, Database, FastForward, Flame, FlaskConical, Gauge, GitBranch, HardDrive, History, Hourglass, KeyRound, Landmark, LayoutDashboard,
   Layers, Library, ListChecks, ListFilter, Lock, MemoryStick, Network, Pause, Play, Power, RefreshCw, RotateCcw, Rocket,
-  Radar, RotateCw, ScrollText, Scale, Search, Settings, ShieldCheck, Skull, SlidersHorizontal, Square, Timer, Trash2, TrendingDown, TrendingUp,
-  Unlock, Users, Wifi, X, Zap
+  Radar, RotateCw, ScrollText, Scale, Search, Settings, ShieldCheck, Skull, SlidersHorizontal, Sparkles, Square, Timer, Trash2, TrendingDown, TrendingUp,
+  Unlock, UserMinus, UserSearch, Users, Wifi, X, Zap
 } from "lucide-react";
 import { LineChart, Line, BarChart, Bar, ComposedChart, XAxis, YAxis, ZAxis, Tooltip, Legend, ReferenceLine, ResponsiveContainer, CartesianGrid, AreaChart, Area, ScatterChart, Scatter, Cell, Treemap, RadialBarChart, RadialBar, PolarAngleAxis, PolarGrid, Radar as ReRadar, RadarChart, PolarRadiusAxis } from "recharts";
 import { createChart, createSeriesMarkers, CandlestickSeries, LineSeries, HistogramSeries, ColorType, CrosshairMode } from "lightweight-charts";
@@ -32,15 +32,19 @@ const chart = Array.from({length: 24}, (_,i) => ({
 // standalone entries + collapsible groups (ribbon-style: one group open at a time)
 const NAV = [
   { kind: "item", name: "Overview", icon: LayoutDashboard },
-  { kind: "group", name: "eFX", icon: Activity, children: [
-      ["Charts", CandlestickChart], ["Market Impact", BarChart3], ["Markout", TrendingUp], ["Spreads", TrendingDown], ["Backtest", FlaskConical], ["Economic Calendar", CalendarDays] ] },
-  { kind: "group", name: "EQ", icon: CircleDollarSign, children: [
-      ["EQ Charts", CandlestickChart], ["Candles", Flame], ["Desk Risk", ShieldCheck], ["Prime Finance", CircleDollarSign],
-      ["Fee Calibration", Gauge], ["Position Risk", Archive], ["Crowding", Boxes], ["Counterparty", Landmark] ] },
+  { kind: "group", name: "AI", icon: Brain, children: [
+      ["Predicted Risk Score", Sparkles], ["Predicted Profitability Score", TrendingUp], ["Predicted Time of Trading", Hourglass], ["Predicted Client Attrition", UserMinus], ["Adaptive Toxicity Classifier", GitBranch] ] },
   { kind: "group", name: "Broker", icon: Landmark, children: [
-      ["Broker Tech", Landmark], ["A/B Book", GitBranch], ["Toxic Analysis", Skull], ["Client Clusters", Users], ["Execution Quality", Crosshair] ] },
+      ["A/B Book", GitBranch], ["Book Margin", Scale], ["Broker Tech", Landmark], ["CCY", CandlestickChart],
+      ["Client Clusters", Users], ["Execution Quality", Crosshair], ["Profit & Loss", CircleDollarSign],
+      ["SSI", Gauge], ["Toxic Analysis", Skull], ["Trader Segments", Layers], ["Trader Tools", UserSearch], ["Volume", BarChart3] ] },
   { kind: "group", name: "Data", icon: Library, children: [
       ["Catalog", BookText], ["Explorer", Search] ] },
+  { kind: "group", name: "eFX", icon: Activity, children: [
+      ["Charts", CandlestickChart], ["Economic Calendar", CalendarDays], ["Market Impact", BarChart3], ["Markout", TrendingUp], ["Spreads", TrendingDown] ] },
+  { kind: "group", name: "EQ", icon: CircleDollarSign, children: [
+      ["Candles", Flame], ["Counterparty", Landmark], ["Crowding", Boxes], ["Desk Risk", ShieldCheck],
+      ["EQ Charts", CandlestickChart], ["Fee Calibration", Gauge], ["Position Risk", Archive], ["Prime Finance", CircleDollarSign] ] },
   { kind: "group", name: "SystemAdmin", icon: Settings, children: [
       ["Control", Power], ["Launcher", Rocket], ["Tests", ListChecks], ["Timers", Timer] ] },
   { kind: "group", name: "SystemMon", icon: Gauge, children: [
@@ -145,7 +149,7 @@ function ReplayChip({ active }) {
 function Header({active}) {
   return <header className="flex h-16 items-center justify-between border-b border-slate-800 bg-[#09141d] px-6">
     <div className="flex items-center gap-3">
-      <div><div className="text-lg font-semibold">{active}</div><div className="text-xs text-slate-500">Friday, 28 Aug 2026 · Asia/Tokyo</div></div>
+      <div className="text-lg font-semibold">{active}</div>
       <ReplayChip active={active}/>
     </div>
     <div className="flex items-center gap-3">
@@ -1029,6 +1033,7 @@ function Catalog() {
   const [q, setQ] = useState("");
   const [collapsed, setCollapsed] = useState({}); // group name -> true when collapsed
   const toggleGroup = (name) => setCollapsed(c => ({ ...c, [name]: !c[name] }));
+  const collapsedInit = useRef(false); // start every group collapsed once, first load only - don't stomp user's manual expand/collapse on a later reload
 
   const load = useCallback(() => {
     fetch(new URL("/api/catalog", GW), { cache: "no-store" })
@@ -1065,6 +1070,12 @@ function Catalog() {
     for (const [name, ts] of byName) if (!defs.some(g => g.name === name)) out.push({ name, tables: ts });
     return out;
   }, [shown, data]);
+
+  useEffect(() => {
+    if (collapsedInit.current || !groups.length) return;
+    collapsedInit.current = true;
+    setCollapsed(Object.fromEntries(groups.map(g => [g.name, true])));
+  }, [groups]);
 
   const cur = tables.find(t => keyOf(t) === sel)
     || (shown.length === 1 ? shown[0] : null);
@@ -2326,7 +2337,7 @@ const fxPricePrec = (v) => (Math.abs(Number(v) || 0) >= 20 ? 3 : 5); // JPY cros
 function Charts() {
   const [syms, setSyms] = useState([]);            // ["AUDCAD", ...]
   const [sym, setSym] = useState(() => { try { return localStorage.getItem("openq.charts.sym") || ""; } catch { return ""; } });
-  const [days, setDays] = useState(5);
+  const [days, setDays] = useState(1);
   const [tf, setTf] = useState(() => { try { return Number(localStorage.getItem("openq.charts.tf")) || 15; } catch { return 15; } });
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
@@ -2484,7 +2495,7 @@ function EqCharts() {
   const [exch, setExch] = useState("");
   const [q, setQ] = useState("");
   const [sym, setSym] = useState(() => { try { return localStorage.getItem("openq.eqcharts.sym") || ""; } catch { return ""; } });
-  const [days, setDays] = useState(3);
+  const [days, setDays] = useState(1);
   const [tf, setTf] = useState(() => { try { return Number(localStorage.getItem("openq.eqcharts.tf")) || 1; } catch { return 1; } });
   useEffect(() => { try { localStorage.setItem("openq.eqcharts.tf", String(tf)); } catch { /* ignore */ } }, [tf]);
   const [data, setData] = useState(null);
@@ -2636,7 +2647,7 @@ function CandlesEq() {
   const [exch, setExch] = useState("");
   const [q, setQ] = useState("");
   const [sym, setSym] = useState(() => { try { return localStorage.getItem("openq.candles.sym") || localStorage.getItem("openq.eqcharts.sym") || ""; } catch { return ""; } });
-  const [days, setDays] = useState(5);
+  const [days, setDays] = useState(3);
   const [tf, setTf] = useState(() => { try { return Number(localStorage.getItem("openq.candles.tf")) || 15; } catch { return 15; } });
   const [pattern, setPattern] = useState(() => { try { return localStorage.getItem("openq.candles.pattern") || "engulfing"; } catch { return "engulfing"; } });
   const [dir, setDir] = useState(() => { try { return localStorage.getItem("openq.candles.dir") || "both"; } catch { return "both"; } });
@@ -3759,8 +3770,8 @@ function CrowdTreeCell(props) {
   const big = width > 46 && height > 24;
   return <g>
     <rect x={x} y={y} width={width} height={height} fill={fill} fillOpacity={0.82} stroke="#0b151e" strokeWidth={2}/>
-    {big && <text x={x + 5} y={y + 14} fill="#0b151e" style={{ fontSize: 10, fontWeight: 700 }}>{name}</text>}
-    {big && height > 38 && <text x={x + 5} y={y + 27} fill="#0b151e" style={{ fontSize: 9, opacity: 0.75 }}>{dtcStr(dtc)}</text>}
+    {big && <text x={x + 5} y={y + 14} fill="#fff" style={{ fontSize: 10, fontWeight: 700 }}>{name}</text>}
+    {big && height > 38 && <text x={x + 5} y={y + 27} fill="#fff" style={{ fontSize: 9, opacity: 0.75 }}>{dtcStr(dtc)}</text>}
   </g>;
 }
 
@@ -4128,6 +4139,7 @@ function tableStatus(t, sourceOnline, kind) {
 // data group (e.g. every yfinance pipeline) collapse under one sub-header.
 const TABLE_TIERS = {
   default: "Demo", markout: "Demo", primefinance: "Demo", spread: "Demo",
+  markout_idb: "Demo", primefinance_idb: "Demo", spread_idb: "Demo",
   mon: "Live", massive: "Live",
   eq_m1_yfinance: "Live", eq_hdb: "Live", efxReplay: "Live", fx_hdb: "Live",
   fx_m1_yfinance: "Live", mon_hdb: "Live", primefinance_hdb: "Live", ta_hdb: "Live",
@@ -4146,12 +4158,13 @@ const TABLE_KIND = {
   fx_m1_yfinance_idb: "idb",
 };
 const TABLE_TIER_ORDER = [
-  "Demo", "Live — Real-time", "Live — Real-time (IDB)", "Live — HDB", "Other",
+  "Demo", "Demo — Real-time (IDB)", "Live — Real-time", "Live — Real-time (IDB)", "Live — HDB", "Other",
 ];
 
 function tableTierOf(src) {
   const kind = src.role || TABLE_KIND[src.name] || "rdb";
   const base = TABLE_TIERS[src.name] || (["rdb", "idb", "hdb"].includes(kind) ? "Live" : "Other");
+  if (base === "Demo") return kind === "idb" ? "Demo — Real-time (IDB)" : base;
   if (base !== "Live") return base;
   if (kind === "hdb") return "Live — HDB";
   if (kind === "idb") return "Live — Real-time (IDB)";
@@ -4163,8 +4176,8 @@ function Tables() {
   const [err,setErr] = useState(null);
   const [auto,setAuto] = useState(true);
   const [updated,setUpdated] = useState(null);
-  const [collapsed,setCollapsed] = useState({});
-  const toggleTier = (t) => setCollapsed(c => ({ ...c, [t]: !c[t] }));
+  const [expanded,setExpanded] = useState({});
+  const toggleTier = (t) => setExpanded(c => ({ ...c, [t]: !c[t] }));
 
   const load = useCallback(() => {
     fetch(new URL("/api/tables", GW), { cache: "no-store" })
@@ -4273,7 +4286,7 @@ function Tables() {
           <tbody>
             {tiers.map(([tier, units]) => {
               const tierSrcs = units.flatMap(u => u.kind === "group" ? u.sources : [u.src]);
-              const open = !collapsed[tier];
+              const open = !!expanded[tier];
               const onlineN = tierSrcs.filter(s => s.connected).length;
               return <React.Fragment key={tier}>
                 <tr className="border-t-2 border-slate-700 bg-[#0a121a]">
@@ -4290,7 +4303,7 @@ function Tables() {
                 {open && units.map(u => {
                   if (u.kind === "source") return renderSource(u.src);
                   const gk = `${tier}/${u.group}`;
-                  const gopen = !collapsed[gk];
+                  const gopen = !!expanded[gk];
                   const gon = u.sources.filter(s => s.connected).length;
                   return <React.Fragment key={gk}>
                     <tr className="border-t border-slate-800 bg-[#0b1620]">
@@ -5386,7 +5399,7 @@ function JobStatus() {
   const [err, setErr] = useState(null);
   const [auto, setAuto] = useState(true);
   const [updated, setUpdated] = useState(null);
-  const [days, setDays] = useState(7);
+  const [days, setDays] = useState(1);
   const [jobFilter, setJobFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [, setTick] = useState(0);
@@ -5712,9 +5725,13 @@ const bkNum = (v, d = 2) => (v == null || !isFinite(v) ? "—" : v.toFixed(d));
 function BrokerTech() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
-  const [auto, setAuto] = useState(true);
+  // .brk.api.suite recomputes the whole window server-side (up to ~90s at
+  // 365d) - default to on-demand (load once, manual refresh) rather than a
+  // 20s background poll that would otherwise run this back-to-back forever
+  // on any tab left open. User can still flip "auto" on.
+  const [auto, setAuto] = useState(false);
   const [updated, setUpdated] = useState(null);
-  const [lookback, setLookback] = useState(90);
+  const [lookback, setLookback] = useState(30);
   const [perfView, setPerfView] = useState("losers"); // losers = best for a B-book
 
   const load = useCallback((lb) => {
@@ -6015,13 +6032,16 @@ const AB_ROUTE_TABS = ["All", "A", "B", "SPLIT"];
 function ABBook() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
-  const [auto, setAuto] = useState(true);
+  // see BrokerTech's note - same shared .brk.api.suite recompute, default
+  // to on-demand rather than a 20s background poll.
+  const [auto, setAuto] = useState(false);
   const [updated, setUpdated] = useState(null);
-  const [lookback, setLookback] = useState(90);
+  const [lookback, setLookback] = useState(30);
   const [thr, setThr] = useState(null); // { toxHighThreshold, profitableClientUsd, largeSizeLots, splitHedgeFrac }
   const [routeTab, setRouteTab] = useState("All");
   const [changedOnly, setChangedOnly] = useState(false);
   const [q, setQ] = useState("");
+  const [brokerSort, setBrokerSort] = useState({ key: "recommendedRev", dir: "desc" });
   const initedThr = useRef(false);
 
   const load = useCallback((lb) => {
@@ -6088,7 +6108,36 @@ function ABBook() {
     { label: "B", value: sim.nB, color: "#34d399" },
     { label: "SPLIT", value: sim.nSplit, color: "#f59e0b" },
   ];
-  const brokerRouting = data?.brokerRouting || [];
+  const BROKER_SORT_KEYS = {
+    brokerTag: (r) => (r.brokerTag || "").toLowerCase(),
+    nProviders: (r) => r.nProviders || 0,
+    totalLots: (r) => r.totalLots || 0,
+    allBBookRev: (r) => r.allBBookRev || 0,
+    allABookRev: (r) => r.allABookRev || 0,
+    recommendedRev: (r) => r.recommendedRev || 0,
+    upliftVsBestExtreme: (r) => r.upliftVsBestExtreme || 0,
+  };
+  const brokerRouting = useMemo(() => {
+    const list = data?.brokerRouting || [];
+    const getKey = BROKER_SORT_KEYS[brokerSort.key] || BROKER_SORT_KEYS.recommendedRev;
+    const mult = brokerSort.dir === "asc" ? 1 : -1;
+    return [...list].sort((a, b) => {
+      const av = getKey(a), bv = getKey(b);
+      if (av < bv) return -1 * mult;
+      if (av > bv) return 1 * mult;
+      return 0;
+    });
+  }, [data?.brokerRouting, brokerSort]);
+  const toggleBrokerSort = (key) => setBrokerSort((s) => (s.key === key
+    ? { key, dir: s.dir === "asc" ? "desc" : "asc" }
+    : { key, dir: key === "brokerTag" ? "asc" : "desc" }));
+  const BrokerSortTh = ({ label, sortKey }) => <th className="px-3 py-2 font-medium">
+    <button onClick={() => toggleBrokerSort(sortKey)}
+      className={`flex items-center gap-1 hover:text-slate-200 ${brokerSort.key === sortKey ? "text-slate-200" : ""}`}>
+      {label}
+      {brokerSort.key === sortKey && (brokerSort.dir === "asc" ? <ArrowUp size={11}/> : <ArrowDown size={11}/>)}
+    </button>
+  </th>;
 
   const Slider = ({ label, valueLabel, k, min, max, step }) => <div>
     <div className="flex items-center justify-between text-xs"><span className="text-slate-400">{label}</span><span className="tabular-nums text-slate-200">{valueLabel}</span></div>
@@ -6180,7 +6229,16 @@ function ABBook() {
         <div className="border-b border-slate-800 px-4 py-2 font-semibold">Routing economics by broker <span className="text-xs font-normal text-slate-500">.brk.broker.routing · desk policy · broker parsed from provider name</span></div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[640px] text-left text-xs">
-            <thead className="bg-[#0a121a] text-slate-500"><tr>{["Broker", "Providers", "Route A/B/S", "Lots", "All-B", "All-A", "Recommended", "Uplift"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <thead className="bg-[#0a121a] text-slate-500"><tr>
+              <BrokerSortTh label="Broker" sortKey="brokerTag"/>
+              <BrokerSortTh label="Providers" sortKey="nProviders"/>
+              <th className="px-3 py-2 font-medium">Route A/B/S</th>
+              <BrokerSortTh label="Lots" sortKey="totalLots"/>
+              <BrokerSortTh label="All-B" sortKey="allBBookRev"/>
+              <BrokerSortTh label="All-A" sortKey="allABookRev"/>
+              <BrokerSortTh label="Recommended" sortKey="recommendedRev"/>
+              <BrokerSortTh label="Uplift" sortKey="upliftVsBestExtreme"/>
+            </tr></thead>
             <tbody className="tabular-nums">
               {brokerRouting.map((r, i) => <tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
                 <td className="px-3 py-1.5 font-medium text-slate-200">{r.brokerTag}</td>
@@ -6270,9 +6328,11 @@ const AT_RISK = new Set(["HIGH", "EXTREME"]);
 function ToxicAnalysis() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
-  const [auto, setAuto] = useState(true);
+  // see BrokerTech's note - same shared .brk.api.suite recompute, default
+  // to on-demand rather than a 20s background poll.
+  const [auto, setAuto] = useState(false);
   const [updated, setUpdated] = useState(null);
-  const [lookback, setLookback] = useState(90);
+  const [lookback, setLookback] = useState(30);
   const [wt, setWt] = useState(null); // { wScalp..wTooGood, toxMed, toxHigh, toxExtreme }
   const [bucketTab, setBucketTab] = useState("All");
   const [changedOnly, setChangedOnly] = useState(false);
@@ -6592,7 +6652,7 @@ function ClientClusters() {
   const [err, setErr] = useState(null);
   const [auto, setAuto] = useState(true);
   const [updated, setUpdated] = useState(null);
-  const [lookback, setLookback] = useState(90);
+  const [lookback, setLookback] = useState(30);
   const [k, setK] = useState(5);
   const [clusterTab, setClusterTab] = useState("All");
   const [q, setQ] = useState("");
@@ -6799,6 +6859,1717 @@ function ClientClusters() {
   </div>;
 }
 
+// ---- Trader Segments (explicit activity/size/frequency/session groups) --
+// /api/brokertech/segments - .brk.segment.classify/.summary. Deliberately
+// NOT Client Clusters: that page blends 8 z-scored features into
+// unsupervised k-means archetypes ("cluster 3"); this page groups
+// providers along 4 INDEPENDENT, named axes a risk desk can reason and
+// filter on directly - activity (total trade count), size (avg lots/
+// trade), frequency (trades/day, i.e. pace - can disagree with activity:
+// a long-running account with many total trades can still be low-pace),
+// and time of day (dominant session). The 3 numeric axes are quartile
+// tiers of THIS WINDOW's own population (computed server-side), not fixed
+// thresholds, so "high frequency" always means "top quartile of what's
+// actually trading right now".
+const SEG_DIM_CFG = {
+  activity: { dataKey: "byActivity", label: "Trading activity", metricLabel: "total trades this window", order: ["Low", "Medium", "High", "VeryHigh"], accent: "#22d3ee" },
+  size: { dataKey: "bySize", label: "Trade size", metricLabel: "avg lots per trade", order: ["Low", "Medium", "High", "VeryHigh"], accent: "#f59e0b" },
+  freq: { dataKey: "byFreq", label: "Trading frequency", metricLabel: "trades per day (pace)", order: ["Low", "Medium", "High", "VeryHigh"], accent: "#a78bfa" },
+  session: { dataKey: "bySession", label: "Time of day", metricLabel: "dominant 8h-UTC session", order: ["Asian", "London", "NewYork"], accent: "#34d399" },
+};
+const SEG_TIER_COLOR = { Low: "#64748b", Medium: "#22d3ee", High: "#f59e0b", VeryHigh: "#f43f5e", Asian: "#818cf8", London: "#22d3ee", NewYork: "#f59e0b", Unknown: "#475569" };
+
+function TraderSegments() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookback, setLookback] = useState(30);
+  const [minTrades, setMinTrades] = useState(10);
+  const [dim, setDim] = useState("activity");
+  const [selectedTier, setSelectedTier] = useState(null);
+  const [q, setQ] = useState("");
+
+  const load = useCallback((lb, mt) => {
+    fetch(new URL(`/api/brokertech/segments?lookbackDays=${lb}&minTrades=${mt}`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(lookback, minTrades); }, [load, lookback, minTrades]);
+  useEffect(() => { if (!auto) return; const id = setInterval(() => load(lookback, minTrades), 30000); return () => clearInterval(id); }, [auto, load, lookback, minTrades]);
+  useEffect(() => { setSelectedTier(null); }, [dim]);
+
+  const cfg = SEG_DIM_CFG[dim];
+  const m = data?.meta || {};
+  const clients = data?.clients || [];
+  const dimKey = dim === "session" ? "sessionTier" : dim === "size" ? "sizeTier" : dim === "freq" ? "freqTier" : "activityTier";
+
+  // server returns buckets sorted by population - reorder to the
+  // dimension's own natural progression (Low->VeryHigh, or session order)
+  // so the chart/table read left-to-right the way a person expects.
+  const buckets = useMemo(() => {
+    const rows = data?.[cfg.dataKey] || [];
+    const byTier = new Map(rows.map(r => [r.tier, r]));
+    return cfg.order.map(t => byTier.get(t) || { tier: t, nProviders: 0, nTrades: 0, totalLots: 0, avgLots: 0, avgHoldMin: 0, tradesPerDay: 0, winRatePct: 0, clientNetProfit: 0, totalRev: 0, toxScore: 0 });
+  }, [data, cfg]);
+
+  const totalProviders = clients.length;
+  const topBucket = [...buckets].sort((a, b) => b.nProviders - a.nProviders)[0] || null;
+  const riskiestBucket = [...buckets].filter(b => b.nProviders > 0).sort((a, b) => b.toxScore - a.toxScore)[0] || null;
+  const totalDeskRev = buckets.reduce((a, b) => a + (b.totalRev || 0), 0);
+
+  const filteredClients = useMemo(() => {
+    let out = clients;
+    if (selectedTier) out = out.filter(r => r[dimKey] === selectedTier);
+    if (q.trim()) { const needle = q.trim().toLowerCase(); out = out.filter(r => (r.name || "").toLowerCase().includes(needle) || String(r.signalId).includes(needle)); }
+    return [...out].sort((a, b) => (b.nTrades || 0) - (a.nTrades || 0));
+  }, [clients, selectedTier, q, dimKey]);
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">trader segments · <span className="text-slate-500">.brk.segment.* · explicit activity/size/frequency/session groups, not a blended archetype</span></span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[30, 90, 180, 365].map(d => <button key={d} onClick={() => setLookback(d)}
+          className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <span className="flex items-center gap-1.5 text-slate-500">min trades
+        <span className="flex overflow-hidden rounded border border-slate-800">
+          {[5, 10, 20, 50].map(n => <button key={n} onClick={() => setMinTrades(n)}
+            className={`px-2 py-1 ${minTrades === n ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{n}</button>)}
+        </span>
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(lookback, minTrades)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {m.sDate && <span className="tabular-nums">{m.sDate} → {m.eDate}</span>}
+        {data && <span className="text-slate-500">{fmtCount(m.nClients)} providers · minTrades ≥ {m.minTrades ?? minTrades}</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/brokertech/segments — {err}
+      <div className="mt-1 text-rose-400/70">needs retailR_hdb (or brokerTech_hdb) with modules/analytics/brokerTech/brokerTech.q in its hdb.json libraries, and OPENQ_BROKERTECH_HDB set.</div></div>}
+
+    {data && <>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label="Classified providers" value={fmtCount(totalProviders)} icon={Layers} sub={`minTrades ≥ ${m.minTrades ?? minTrades} · window trades ${fmtCount(m.nTradeRows)}`}/>
+        <StatTile label={`Largest ${cfg.label.toLowerCase()} group`} value={topBucket ? String(topBucket.tier) : "—"} icon={Boxes}
+          sub={topBucket ? `${fmtCount(topBucket.nProviders)} providers` : "—"} accent={topBucket ? SEG_TIER_COLOR[topBucket.tier] : undefined}/>
+        <StatTile label="Riskiest bucket (avg tox)" value={riskiestBucket ? String(riskiestBucket.tier) : "—"} icon={Skull}
+          sub={riskiestBucket ? `avg toxicity ${bkNum(riskiestBucket.toxScore, 2)}` : "—"} accent={riskiestBucket ? riskColor(riskiestBucket.toxScore) : undefined}/>
+        <StatTile label="Desk revenue (window)" value={fmtUsd(totalDeskRev, { plus: true })} icon={totalDeskRev >= 0 ? TrendingUp : TrendingDown}
+          tone={totalDeskRev > 0 ? "pos" : "warn"} sub="sum across all classified providers"/>
+      </div>
+
+      <section className="panel p-4">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="font-semibold">Group by <span className="text-xs font-normal text-slate-500">click a bar to filter the table below to that bucket</span></div>
+          <span className="flex overflow-hidden rounded border border-slate-800 text-xs">
+            {Object.entries(SEG_DIM_CFG).map(([key, c]) => <button key={key} onClick={() => setDim(key)}
+              className={`px-2.5 py-1 ${dim === key ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{c.label}</button>)}
+          </span>
+        </div>
+        <div className="mb-2 text-[11px] text-slate-500">{cfg.metricLabel}{dim !== "session" && " · quartiles of this window's own population"}</div>
+        <div className="grid gap-3 lg:grid-cols-2">
+          <div className="h-64"><ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={buckets} margin={{ top: 4, right: 24, bottom: 4, left: 8 }}
+              onClick={(s) => { const t = s?.activePayload?.[0]?.payload?.tier; if (t) setSelectedTier(cur => cur === t ? null : t); }}>
+              <CartesianGrid stroke="#1e2b36"/>
+              <XAxis dataKey="tier" stroke="#566673" fontSize={10}/>
+              <YAxis yAxisId="n" stroke="#566673" fontSize={10}/>
+              <YAxis yAxisId="tox" orientation="right" domain={[0, 1]} stroke="#566673" fontSize={10}/>
+              <Tooltip contentStyle={TT} formatter={(v, name) => name === "avg toxicity" ? [bkNum(v, 2), name] : [fmtCount(v), name]}/>
+              <Legend wrapperStyle={{ fontSize: 11 }}/>
+              <Bar yAxisId="n" dataKey="nProviders" name="providers" isAnimationActive={false} cursor="pointer">
+                {buckets.map((b, i) => <Cell key={i} fill={SEG_TIER_COLOR[b.tier] || "#475569"} fillOpacity={!selectedTier || selectedTier === b.tier ? 1 : 0.3}/>)}
+              </Bar>
+              <Line yAxisId="tox" type="monotone" dataKey="toxScore" name="avg toxicity" stroke="#f43f5e" strokeWidth={1.5} dot={{ r: 3 }}/>
+            </ComposedChart>
+          </ResponsiveContainer></div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-[#0a121a] text-slate-500"><tr>{[cfg.label, "Providers", "Avg lots", "Trades/day", "Win%", "Client P&L", "Desk rev", "Avg tox"].map(h => <th key={h} className="px-2 py-1.5 font-medium">{h}</th>)}</tr></thead>
+              <tbody className="tabular-nums">
+                {buckets.map(b => <tr key={b.tier} onClick={() => setSelectedTier(cur => cur === b.tier ? null : b.tier)}
+                  className={`cursor-pointer border-t border-slate-800/60 hover:bg-slate-900/50 ${selectedTier === b.tier ? "bg-slate-900/70" : ""}`}>
+                  <td className="px-2 py-1.5"><span className="flex items-center gap-1.5 font-medium text-slate-200"><span className="h-2 w-2 rounded-full" style={{ background: SEG_TIER_COLOR[b.tier] }}/>{b.tier}</span></td>
+                  <td className="px-2 py-1.5 text-slate-400">{fmtCount(b.nProviders)}</td>
+                  <td className="px-2 py-1.5 text-slate-300">{bkNum(b.avgLots, 2)}</td>
+                  <td className="px-2 py-1.5 text-slate-300">{bkNum(b.tradesPerDay, 2)}</td>
+                  <td className="px-2 py-1.5 text-slate-400">{bkPct(b.winRatePct, 0)}</td>
+                  <td className={`px-2 py-1.5 ${pnlTone(b.clientNetProfit)}`}>{fmtUsd(b.clientNetProfit, { plus: true })}</td>
+                  <td className={`px-2 py-1.5 font-semibold ${pnlTone(b.totalRev)}`}>{fmtUsd(b.totalRev, { plus: true })}</td>
+                  <td className="px-2 py-1.5" style={{ color: riskColor(b.toxScore) }}>{bkNum(b.toxScore, 2)}</td>
+                </tr>)}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel overflow-hidden">
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-800 px-4 py-2">
+          <span className="font-semibold">Per-provider detail</span>
+          <span className="text-xs font-normal text-slate-500">all 4 classifications shown together</span>
+          {selectedTier && <button onClick={() => setSelectedTier(null)}
+            className="ml-1 flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-800">
+            <span className="h-1.5 w-1.5 rounded-full" style={{ background: SEG_TIER_COLOR[selectedTier] }}/>{cfg.label}: {selectedTier} <X size={10}/>
+          </button>}
+          <span className="relative ml-auto">
+            <Search size={12} className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-600"/>
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="search provider or id"
+              className="rounded border border-slate-800 bg-slate-950/60 py-1 pl-6 pr-2 text-xs text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-cyan-700"/>
+          </span>
+        </div>
+        <div className="max-h-[56vh] overflow-auto">
+          <table className="w-full min-w-[1180px] text-left text-xs">
+            <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Provider", "Activity", "Size", "Frequency", "Session", "Trades", "Trades/day", "Avg lots", "Win%", "Client P&L", "Desk rev", "Tox"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <tbody className="tabular-nums">
+              {filteredClients.slice(0, 500).map((r, i) => <tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+                <td className="px-3 py-1.5 text-slate-200"><span className="font-mono text-slate-500">{r.signalId}</span> {r.name}</td>
+                <td className="px-3 py-1.5"><span className="rounded px-1.5 py-0.5 text-[11px]" style={{ background: `${SEG_TIER_COLOR[r.activityTier]}22`, color: SEG_TIER_COLOR[r.activityTier] }}>{r.activityTier}</span></td>
+                <td className="px-3 py-1.5"><span className="rounded px-1.5 py-0.5 text-[11px]" style={{ background: `${SEG_TIER_COLOR[r.sizeTier]}22`, color: SEG_TIER_COLOR[r.sizeTier] }}>{r.sizeTier}</span></td>
+                <td className="px-3 py-1.5"><span className="rounded px-1.5 py-0.5 text-[11px]" style={{ background: `${SEG_TIER_COLOR[r.freqTier]}22`, color: SEG_TIER_COLOR[r.freqTier] }}>{r.freqTier}</span></td>
+                <td className="px-3 py-1.5"><span className="rounded px-1.5 py-0.5 text-[11px]" style={{ background: `${SEG_TIER_COLOR[r.sessionTier]}22`, color: SEG_TIER_COLOR[r.sessionTier] }}>{r.sessionTier}</span></td>
+                <td className="px-3 py-1.5 text-slate-400">{fmtCount(r.nTrades)}</td>
+                <td className="px-3 py-1.5 text-slate-300">{bkNum(r.tradesPerDay, 2)}</td>
+                <td className="px-3 py-1.5 text-slate-300">{bkNum(r.avgLots, 2)}</td>
+                <td className="px-3 py-1.5 text-slate-400">{bkPct(r.winRatePct, 0)}</td>
+                <td className={`px-3 py-1.5 ${pnlTone(r.clientNetProfit)}`}>{fmtUsd(r.clientNetProfit, { plus: true })}</td>
+                <td className={`px-3 py-1.5 font-semibold ${pnlTone(r.totalRev)}`}>{fmtUsd(r.totalRev, { plus: true })}</td>
+                <td className="px-3 py-1.5" style={{ color: riskColor(r.toxScore) }}>{bkNum(r.toxScore, 2)}</td>
+              </tr>)}
+              {!filteredClients.length && <tr><td colSpan={12} className="px-3 py-8 text-center text-slate-600">no providers match this filter</td></tr>}
+            </tbody>
+          </table>
+          {filteredClients.length > 500 && <div className="border-t border-slate-800 px-3 py-2 text-center text-[11px] text-slate-600">showing top 500 of {fmtCount(filteredClients.length)} by trade count - narrow with search or a bucket filter to see more</div>}
+        </div>
+      </section>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading trader segmentation…</div>}
+  </div>;
+}
+
+// ---- CCY (per-symbol behavioural profile, across every account/broker) --
+// /api/brokertech/ccy - .brk.ccy.*. Every other Broker page slices by
+// ACCOUNT (Trader Segments, Client Clusters) or by BROKER (the scorecard
+// on Broker Tech); this is the missing third axis - pick ONE instrument
+// and see its own trading behaviour (hold time, size), who trades it
+// (brokerage breakdown), and how much of the window it's actually been
+// active in (daily trend, first/last seen = "duration available") - all
+// pooled across every account and every underlying brokerage that ever
+// touched it.
+const CCY_HOLD_ORDER = ["<=5m", "5-30m", "30m-2h", "2-24h", ">24h"];
+const CCY_HOLD_COLOR = { "<=5m": "#f43f5e", "5-30m": "#f59e0b", "30m-2h": "#eab308", "2-24h": "#34d399", ">24h": "#818cf8" };
+const CCY_SIZE_ORDER = ["Micro", "Mini", "Standard", "Large", "Whale", "Unknown"];
+const CCY_SIZE_COLOR = { Micro: "#64748b", Mini: "#22d3ee", Standard: "#34d399", Large: "#f59e0b", Whale: "#f43f5e", Unknown: "#475569" };
+const CCY_SESSION_COLOR = { Asian: "#818cf8", London: "#22d3ee", NewYork: "#f59e0b" };
+
+function CCY() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookback, setLookback] = useState(30);
+  const [symbol, setSymbol] = useState("EURUSD");
+  const [symFilter, setSymFilter] = useState("");
+
+  const load = useCallback((lb, sym) => {
+    fetch(new URL(`/api/brokertech/ccy?lookbackDays=${lb}&symbol=${encodeURIComponent(sym)}`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(lookback, symbol); }, [load, lookback, symbol]);
+  useEffect(() => { if (!auto) return; const id = setInterval(() => load(lookback, symbol), 30000); return () => clearInterval(id); }, [auto, load, lookback, symbol]);
+
+  const lastSymbols = useRef([]);
+  if (data?.symbols?.length) lastSymbols.current = data.symbols;
+  const allSymbols = data?.symbols?.length ? data.symbols : lastSymbols.current;
+  const symbolOptions = useMemo(() => {
+    const needle = symFilter.trim().toLowerCase();
+    let out = needle ? allSymbols.filter(s => s.symbol.toLowerCase().includes(needle)) : allSymbols;
+    if (!out.some(s => s.symbol === symbol)) { const cur = allSymbols.find(s => s.symbol === symbol); out = cur ? [cur, ...out] : out; }
+    return out;
+  }, [allSymbols, symFilter, symbol]);
+
+  const m = data?.meta || {};
+  const h = data?.headline || {};
+  const hasData = (h.nTrades || 0) > 0;
+
+  const holdChart = useMemo(() => {
+    const byBand = new Map((data?.holdDist || []).map(r => [r.band, r]));
+    return CCY_HOLD_ORDER.map(b => byBand.get(b) || { band: b, nTrades: 0, totalLots: 0, pct: 0 });
+  }, [data]);
+  const sizeChart = useMemo(() => {
+    const byBand = new Map((data?.sizeDist || []).map(r => [r.band, r]));
+    return CCY_SIZE_ORDER.map(b => byBand.get(b) || { band: b, nTrades: 0, totalLots: 0, pct: 0 }).filter(r => r.band !== "Unknown" || r.nTrades > 0);
+  }, [data]);
+  const sessionSegs = useMemo(() => (data?.sessionMix || []).map(r => ({ label: r.session, value: r.pct, color: CCY_SESSION_COLOR[r.session] || "#64748b" })), [data]);
+  const dailyChart = useMemo(() => (data?.daily || []).map(r => ({ date: (r.date || "").slice(5, 10), nTrades: r.nTrades, totalLots: r.totalLots })), [data]);
+  const brokers = data?.brokers || [];
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">CCY · <span className="text-slate-500">.brk.ccy.* · one symbol's behaviour across every account &amp; brokerage</span></span>
+      <span className="flex items-center gap-1.5">
+        <input value={symFilter} onChange={e => setSymFilter(e.target.value)} placeholder="filter…"
+          className="w-20 rounded border border-slate-800 bg-slate-950/60 px-1.5 py-1 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-cyan-700"/>
+        <select value={symbol} onChange={e => setSymbol(e.target.value)}
+          className="rounded border border-slate-700 bg-slate-950 px-1.5 py-1 text-slate-200">
+          {symbolOptions.map(s => <option key={s.symbol} value={s.symbol}>{s.symbol} ({fmtCount(s.nTrades)})</option>)}
+        </select>
+      </span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[30, 90, 180, 365].map(d => <button key={d} onClick={() => setLookback(d)}
+          className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(lookback, symbol)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {m.sDate && <span className="tabular-nums">{m.sDate} → {m.eDate}</span>}
+        {data && <span className="text-slate-500">{fmtCount(m.nTradeRows)} trades in window</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/brokertech/ccy — {err}
+      <div className="mt-1 text-rose-400/70">needs retailR_hdb (or brokerTech_hdb) with modules/analytics/brokerTech/brokerTech.q in its hdb.json libraries, and OPENQ_BROKERTECH_HDB set.</div></div>}
+
+    {data && !hasData && <div className="rounded border border-amber-900 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">no trades for {symbol} in this {lookback}d window - try a longer lookback or a different symbol.</div>}
+
+    {data && hasData && <>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label={`${symbol} · providers / trades`} value={`${fmtCount(h.nProviders)} / ${fmtCount(h.nTrades)}`} icon={Users}
+          sub={`${bkNum(h.totalLots, 0)} lots total`}/>
+        <StatTile label="Size (avg / median)" value={`${bkNum(h.avgLots, 2)} / ${bkNum(h.medLots, 3)}`} icon={Scale}
+          sub="lots per trade"/>
+        <StatTile label="Hold time (avg / median)" value={`${bkNum(h.avgHoldMin, 0)}m / ${bkNum(h.medHoldMin, 0)}m`} icon={Hourglass}
+          sub={`${bkPct(h.buyPct, 0)} buy · ${bkPct(100 - (h.buyPct || 0), 0)} sell`}/>
+        <StatTile label="Data available" value={`${h.spanDays ?? "—"}d`} icon={CalendarDays}
+          sub={h.firstDate ? `${(h.firstDate || "").slice(0, 10)} → ${(h.lastDate || "").slice(0, 10)}` : "—"}/>
+      </div>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label="Win rate / profit factor" value={`${bkPct(h.winRatePct, 0)} / ${bkNum(h.profitFactor, 2)}`} icon={TrendingUp}/>
+        <StatTile label="Client net P&L" value={fmtUsd(h.clientNetProfit, { plus: true })} icon={h.clientNetProfit >= 0 ? TrendingUp : TrendingDown}
+          tone={h.clientNetProfit > 0 ? "warn" : "pos"} sub="all accounts, all brokers"/>
+        <StatTile label="Desk revenue" value={fmtUsd(h.totalRev, { plus: true })} icon={h.totalRev >= 0 ? TrendingUp : TrendingDown}
+          tone={h.totalRev > 0 ? "pos" : "warn"} sub={`${h.revPerLot != null ? `$${h.revPerLot.toFixed(2)}/lot` : "—"}`}/>
+        <StatTile label="Brokerages trading it" value={fmtCount(brokers.length)} icon={Landmark}
+          sub={brokers[0] ? `top: ${brokers[0].brokerTag}` : "—"}/>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Holding time <span className="text-xs font-normal text-slate-500">how long {symbol} positions stay open</span></div>
+          <div className="h-56"><ResponsiveContainer width="100%" height="100%">
+            <BarChart data={holdChart} margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36"/>
+              <XAxis dataKey="band" stroke="#566673" fontSize={10}/>
+              <YAxis stroke="#566673" fontSize={10} tickFormatter={(v) => `${v}%`}/>
+              <Tooltip contentStyle={TT} formatter={(v, name, p) => [`${bkNum(v, 1)}% (${fmtCount(p.payload.nTrades)} trades)`, "share"]}/>
+              <Bar dataKey="pct" name="share of trades" isAnimationActive={false}>
+                {holdChart.map((r, i) => <Cell key={i} fill={CCY_HOLD_COLOR[r.band]}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer></div>
+        </section>
+
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Trade size <span className="text-xs font-normal text-slate-500">micro &lt;0.1 · mini &lt;1 · standard &lt;5 · large &lt;20 · whale 20+ lots</span></div>
+          <div className="h-56"><ResponsiveContainer width="100%" height="100%">
+            <BarChart data={sizeChart} margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36"/>
+              <XAxis dataKey="band" stroke="#566673" fontSize={10}/>
+              <YAxis stroke="#566673" fontSize={10} tickFormatter={(v) => `${v}%`}/>
+              <Tooltip contentStyle={TT} formatter={(v, name, p) => [`${bkNum(v, 1)}% (${fmtCount(p.payload.nTrades)} trades)`, "share"]}/>
+              <Bar dataKey="pct" name="share of trades" isAnimationActive={false}>
+                {sizeChart.map((r, i) => <Cell key={i} fill={CCY_SIZE_COLOR[r.band]}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer></div>
+        </section>
+      </div>
+
+      <section className="panel p-4">
+        <div className="mb-2 font-semibold">Time of trading <span className="text-xs font-normal text-slate-500">share of {symbol}'s own trades by 8h-UTC session</span></div>
+        <SplitBar segments={sessionSegs} height={10} showLegend/>
+      </section>
+
+      <section className="panel p-4">
+        <div className="mb-2 font-semibold">Activity over time <span className="text-xs font-normal text-slate-500">trades/day - "duration available" made visible, gaps included</span></div>
+        <div className="h-56"><ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={dailyChart} margin={{ top: 4, right: 24, bottom: 4, left: 8 }}>
+            <CartesianGrid stroke="#1e2b36"/>
+            <XAxis dataKey="date" stroke="#566673" fontSize={10}/>
+            <YAxis yAxisId="n" stroke="#566673" fontSize={10}/>
+            <YAxis yAxisId="lots" orientation="right" stroke="#566673" fontSize={10}/>
+            <Tooltip contentStyle={TT} formatter={(v, name) => [name === "lots" ? bkNum(v, 1) : fmtCount(v), name]}/>
+            <Legend wrapperStyle={{ fontSize: 11 }}/>
+            <Bar yAxisId="n" dataKey="nTrades" name="trades" fill="#22d3ee" isAnimationActive={false}/>
+            <Line yAxisId="lots" type="monotone" dataKey="totalLots" name="lots" stroke="#f59e0b" dot={false} strokeWidth={1.5}/>
+          </ComposedChart>
+        </ResponsiveContainer></div>
+      </section>
+
+      <section className="panel overflow-hidden">
+        <div className="border-b border-slate-800 px-4 py-2 font-semibold">Brokerage breakdown <span className="text-xs font-normal text-slate-500">who trades {symbol}, and what it's worth to the desk</span></div>
+        <div className="grid gap-3 p-4 lg:grid-cols-2">
+          <div className="h-64"><ResponsiveContainer width="100%" height="100%">
+            <BarChart data={brokers} layout="vertical" margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36" horizontal={false}/>
+              <XAxis type="number" stroke="#566673" fontSize={10} tickFormatter={(v) => fmtUsd(v)}/>
+              <YAxis type="category" dataKey="brokerTag" stroke="#566673" fontSize={10} width={84}/>
+              <Tooltip contentStyle={TT} formatter={(v) => fmtUsd(v, { plus: true })}/>
+              <ReferenceLine x={0} stroke="#37505f"/>
+              <Bar dataKey="totalRev" name="desk revenue" isAnimationActive={false}>
+                {brokers.map((r, i) => <Cell key={i} fill={(r.totalRev || 0) >= 0 ? "#34d399" : "#f43f5e"}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer></div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-[#0a121a] text-slate-500"><tr>{["Broker", "Providers", "Trades", "Lots", "Client P&L", "Desk rev"].map(h2 => <th key={h2} className="px-2 py-1.5 font-medium">{h2}</th>)}</tr></thead>
+              <tbody className="tabular-nums">
+                {brokers.map(r => <tr key={r.brokerTag} className="border-t border-slate-800/60 hover:bg-slate-900/50">
+                  <td className="px-2 py-1.5 font-medium text-slate-200">{r.brokerTag}</td>
+                  <td className="px-2 py-1.5 text-slate-400">{fmtCount(r.nProviders)}</td>
+                  <td className="px-2 py-1.5 text-slate-400">{fmtCount(r.nTrades)}</td>
+                  <td className="px-2 py-1.5 text-slate-400">{bkNum(r.totalLots, 1)}</td>
+                  <td className={`px-2 py-1.5 ${pnlTone(r.clientNetProfit)}`}>{fmtUsd(r.clientNetProfit, { plus: true })}</td>
+                  <td className={`px-2 py-1.5 font-semibold ${pnlTone(r.totalRev)}`}>{fmtUsd(r.totalRev, { plus: true })}</td>
+                </tr>)}
+                {!brokers.length && <tr><td colSpan={6} className="px-3 py-8 text-center text-slate-600">no brokerage breakdown for this symbol</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading {symbol} profile…</div>}
+  </div>;
+}
+
+// ---- Trader Tools (per-account analytics) ------------------------------
+// /api/tradertools/report - .oq.tt.*. One account (signalId - brokerTech's
+// same synthesized (platform;acctId) id, see brokerTechSourceR.q), its
+// whole trade history profiled: equity curve, drawdown, holding-period/
+// instrument mix, time-of-day pattern, martingale ratio, first-half vs
+// second-half persistence.
+//
+// Deliberately search-first, no roster preload: .oq.tt.api.roster does a
+// full-window `select ... by signalId` scan (3.9M+ rows at 365d) just to
+// populate a dropdown, and .oq.tt.api.report itself re-scans the same
+// window per account - at the old 365d default that's a ~16s cold query
+// PER account, so eagerly loading a roster of 500 accounts (and then the
+// first one's report) on page mount is what was blanking the page out.
+// The user types the signalId/acctId they already know; nothing loads
+// until they submit it, and the default lookback is 30d so that first
+// query is cheap.
+function TraderTools() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookback, setLookback] = useState(30);
+  const [signalId, setSignalId] = useState(null);
+  const [searchInput, setSearchInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [loadStart, setLoadStart] = useState(null);
+  const [elapsed, setElapsed] = useState(0);
+
+  const submitSearch = useCallback(() => {
+    const n = Number(searchInput.trim());
+    if (searchInput.trim() && Number.isFinite(n)) setSignalId(n);
+  }, [searchInput]);
+
+  const load = useCallback((sid, lb) => {
+    if (sid == null) return;
+    setLoading(true); setLoadStart(Date.now());
+    fetch(new URL(`/api/tradertools/report?signalId=${sid}&lookbackDays=${lb}`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+  useEffect(() => { load(signalId, lookback); }, [load, signalId, lookback]);
+  useEffect(() => { if (!auto || signalId == null) return; const id = setInterval(() => load(signalId, lookback), 30000); return () => clearInterval(id); }, [auto, load, signalId, lookback]);
+  // ticking elapsed-time readout while a request is in flight - long
+  // lookbacks (1095d) genuinely take ~70s (the window pull scans every
+  // account in the date range before filtering to this one signalId), so
+  // without this a slow-but-working query looks identical to a stuck one.
+  useEffect(() => {
+    if (!loading) return;
+    const id = setInterval(() => setElapsed(Math.round((Date.now() - loadStart) / 1000)), 500);
+    return () => clearInterval(id);
+  }, [loading, loadStart]);
+
+  const m = data?.meta || {};
+  const s = data?.summary || {};
+  const dd = data?.drawdown || {};
+  const mg = data?.martingale || {};
+  const pr = data?.persistence || {};
+  const hasData = (s.nTrades || 0) > 0;
+
+  const equityChart = useMemo(() => (data?.equityCurve || []).map(r => ({ t: r.closeTime, cumProfit: r.cumProfit })), [data]);
+  const ddChart = useMemo(() => (dd.series || []).map(r => ({ t: r.closeTime, dd: r.dd })), [dd]);
+  // renamed style -> bucket: Recharts spreads each Bar data row's own
+  // fields onto the underlying SVG element it renders, and a row shaped
+  // like {style: "Scalp", ...} collides with React's real `style` prop
+  // (which must be an object, not a string) - this is what crashed the
+  // page after every load, with no clue from the data itself.
+  const styleChart = useMemo(() => (data?.styleBreakdown || []).map(({ style, ...r }) => ({ ...r, bucket: style })), [data]);
+  const symbolChart = (data?.symbolBreakdown || []).slice(0, 8);
+  const hodChart = useMemo(() => (data?.hourOfDay || []).map(r => ({ ...r, winRatePct: r.winRate != null ? r.winRate * 100 : null })), [data]);
+  const dowChart = data?.dayOfWeek || [];
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">Trader Tools · <span className="text-slate-500">.oq.tt.* · one account's full trade profile</span></span>
+      <span className="flex items-center gap-1.5">
+        <input value={searchInput} onChange={e => setSearchInput(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter") submitSearch(); }}
+          placeholder="search account / signal id…"
+          className="w-48 rounded border border-slate-800 bg-slate-950/60 px-1.5 py-1 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-cyan-700"/>
+        <button onClick={submitSearch} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><Search size={12}/> search</button>
+      </span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[30, 90, 365, 1095].map(d => <button key={d} onClick={() => setLookback(d)}
+          className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(signalId, lookback)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {loading && <span className="flex items-center gap-1.5 text-cyan-400"><RefreshCw size={11} className="animate-spin"/> loading… {elapsed}s{lookback >= 1095 ? " (long lookback, can take ~70s)" : ""}</span>}
+        {m.sDate && <span className="tabular-nums">{m.sDate} → {m.eDate}</span>}
+        {data && <span className="text-slate-500">{fmtCount(m.nTradeRows)} trades in window</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/tradertools/report — {err}
+      <div className="mt-1 text-rose-400/70">needs retailR_hdb with modules/analytics/traderTools/{"{traderTools,api}"}.q in its hdb.json libraries.</div></div>}
+
+    {data && !hasData && <div className="rounded border border-amber-900 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">no executed trades for this account in the selected window - try a longer lookback.</div>}
+
+    {data && hasData && <>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label={`Account ${m.signalId} · ${m.platform}`} value={`${fmtCount(s.nTrades)} trades`} icon={UserSearch} sub={`acct #${m.acctId}`}/>
+        <StatTile label="Win rate / profit factor" value={`${bkPct(s.winRatePct, 0)} / ${bkNum(s.profitFactor, 2)}`} icon={TrendingUp}/>
+        <StatTile label="Net P&L" value={fmtUsd(s.netProfit, { plus: true })} icon={s.netProfit >= 0 ? TrendingUp : TrendingDown} tone={s.netProfit >= 0 ? "pos" : "neg"}/>
+        <StatTile label="Max drawdown" value={fmtUsd(dd.maxDrawdown)} icon={TrendingDown} tone="neg" sub={`current: ${fmtUsd(dd.currentDrawdown)}`}/>
+      </div>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label="Hold time (avg / median)" value={`${bkNum(s.avgHoldMin, 0)}m / ${bkNum(s.medHoldMin, 0)}m`} icon={Hourglass}/>
+        <StatTile label="Instruments traded" value={fmtCount(s.nSymbols)} icon={Layers}/>
+        <StatTile label="Martingale ratio" value={mg.martingaleRatio != null ? bkNum(mg.martingaleRatio, 2) : "—"} icon={Scale}
+          tone={mg.martingaleRatio > 1.2 ? "warn" : "mute"} sub={mg.martingaleRatio != null ? "size after loss ÷ size after win" : "needs ≥5 trades each side"}/>
+        <StatTile label="Win rate: 1st half → 2nd half" value={pr.h1WinRate != null ? `${bkPct(pr.h1WinRate * 100, 0)} → ${bkPct(pr.h2WinRate * 100, 0)}` : "—"}
+          icon={pr.improved ? TrendingUp : TrendingDown} tone={pr.h1WinRate == null ? "mute" : pr.improved ? "pos" : "warn"}
+          sub={pr.h1WinRate != null ? (pr.improved ? "improved" : "declined") : "needs ≥20 trades"}/>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Equity curve <span className="text-xs font-normal text-slate-500">cumulative realized P&amp;L, trade by trade</span></div>
+          <div className="h-56"><ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={equityChart} margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36"/>
+              <XAxis dataKey="t" stroke="#566673" fontSize={9} tickFormatter={v => (v || "").slice(0, 10)}/>
+              <YAxis stroke="#566673" fontSize={10} tickFormatter={v => fmtUsd(v)}/>
+              <Tooltip contentStyle={TT} formatter={v => fmtUsd(v, { plus: true })} labelFormatter={v => (v || "").slice(0, 19).replace("T", " ")}/>
+              <ReferenceLine y={0} stroke="#37505f"/>
+              <Area type="monotone" dataKey="cumProfit" name="cum. P&L" stroke="#22d3ee" fill="#22d3ee" fillOpacity={0.15} isAnimationActive={false}/>
+            </AreaChart>
+          </ResponsiveContainer></div>
+        </section>
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Drawdown <span className="text-xs font-normal text-slate-500">$ off the running P&amp;L peak</span></div>
+          <div className="h-56"><ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={ddChart} margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36"/>
+              <XAxis dataKey="t" stroke="#566673" fontSize={9} tickFormatter={v => (v || "").slice(0, 10)}/>
+              <YAxis stroke="#566673" fontSize={10} tickFormatter={v => fmtUsd(v)}/>
+              <Tooltip contentStyle={TT} formatter={v => fmtUsd(v)} labelFormatter={v => (v || "").slice(0, 19).replace("T", " ")}/>
+              <ReferenceLine y={0} stroke="#37505f"/>
+              <Area type="monotone" dataKey="dd" name="drawdown" stroke="#f43f5e" fill="#f43f5e" fillOpacity={0.2} isAnimationActive={false}/>
+            </AreaChart>
+          </ResponsiveContainer></div>
+        </section>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Holding-period style <span className="text-xs font-normal text-slate-500">net P&amp;L by how long trades were held (Part V's buckets)</span></div>
+          <div className="h-56"><ResponsiveContainer width="100%" height="100%">
+            <BarChart data={styleChart} margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36"/>
+              <XAxis dataKey="bucket" stroke="#566673" fontSize={10}/>
+              <YAxis stroke="#566673" fontSize={10} tickFormatter={v => fmtUsd(v)}/>
+              <Tooltip contentStyle={TT} formatter={(v, n, p) => [fmtUsd(v, { plus: true }), `${fmtCount(p.payload.nTrades)} trades`]}/>
+              <ReferenceLine y={0} stroke="#37505f"/>
+              <Bar dataKey="netProfit" name="net P&L" isAnimationActive={false}>
+                {styleChart.map((r, i) => <Cell key={i} fill={(r.netProfit || 0) >= 0 ? "#34d399" : "#f43f5e"}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer></div>
+        </section>
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Instruments <span className="text-xs font-normal text-slate-500">net P&amp;L, biggest movers first</span></div>
+          <div className="h-56"><ResponsiveContainer width="100%" height="100%">
+            <BarChart data={symbolChart} layout="vertical" margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36" horizontal={false}/>
+              <XAxis type="number" stroke="#566673" fontSize={10} tickFormatter={v => fmtUsd(v)}/>
+              <YAxis type="category" dataKey="symbol" stroke="#566673" fontSize={10} width={72}/>
+              <Tooltip contentStyle={TT} formatter={v => fmtUsd(v, { plus: true })}/>
+              <ReferenceLine x={0} stroke="#37505f"/>
+              <Bar dataKey="netProfit" name="net P&L" isAnimationActive={false}>
+                {symbolChart.map((r, i) => <Cell key={i} fill={(r.netProfit || 0) >= 0 ? "#34d399" : "#f43f5e"}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer></div>
+        </section>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Time of day <span className="text-xs font-normal text-slate-500">trades opened &amp; win rate, by UTC hour</span></div>
+          <div className="h-56"><ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={hodChart} margin={{ top: 4, right: 24, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36"/>
+              <XAxis dataKey="hod" stroke="#566673" fontSize={10}/>
+              <YAxis yAxisId="n" stroke="#566673" fontSize={10}/>
+              <YAxis yAxisId="wr" orientation="right" stroke="#566673" fontSize={10} tickFormatter={v => `${v}%`}/>
+              <Tooltip contentStyle={TT}/>
+              <Legend wrapperStyle={{ fontSize: 11 }}/>
+              <Bar yAxisId="n" dataKey="nTrades" name="trades" fill="#22d3ee" isAnimationActive={false}/>
+              <Line yAxisId="wr" type="monotone" dataKey="winRatePct" name="win rate %" stroke="#f59e0b" dot={false} strokeWidth={1.5} connectNulls/>
+            </ComposedChart>
+          </ResponsiveContainer></div>
+        </section>
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Day of week <span className="text-xs font-normal text-slate-500">trades opened, Monday first</span></div>
+          <div className="h-56"><ResponsiveContainer width="100%" height="100%">
+            <BarChart data={dowChart} margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36"/>
+              <XAxis dataKey="dow" stroke="#566673" fontSize={10}/>
+              <YAxis stroke="#566673" fontSize={10}/>
+              <Tooltip contentStyle={TT} formatter={(v, n, p) => [fmtCount(v), `win rate ${bkPct((p.payload.winRate || 0) * 100, 0)}`]}/>
+              <Bar dataKey="nTrades" name="trades" fill="#22d3ee" isAnimationActive={false}/>
+            </BarChart>
+          </ResponsiveContainer></div>
+        </section>
+      </div>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">
+      {signalId == null ? "enter an account or signal id above, then press search or Enter"
+        : loading ? `loading account profile… ${elapsed}s${lookback >= 1095 ? " — long lookbacks scan the full book before filtering to this account, can take ~70s" : ""}`
+        : "no data yet"}
+    </div>}
+  </div>;
+}
+
+// ---- SSI (Speculative Sentiment Index) ---------------------------------
+// /api/brokertech/ssi - .brk.ssi.*. A real SSI (FXCM/myfxbook-style) reads
+// a LIVE snapshot of currently-open positions; this archive has no such
+// feed - it's trade HISTORY, and every real buy/sell row already carries
+// a closeTime (checked directly against the data, see [[brokertech-
+// dashboard]]). What's shown here is the honest alternative: of
+// everything OPENED in a recent window, what share was long vs short -
+// by volume (the standard SSI convention) or by trade count, toggled.
+// Two groupings, same shape the reference design uses: "Pairs" - the top
+// N most-traded symbols, one bar each; "Brokers" - one symbol, broken out
+// by underlying brokerage. Clicking a pair's row jumps straight into its
+// Brokers breakdown.
+const SSI_BUY_COLOR = "#3b82f6";
+const SSI_SELL_COLOR = "#f43f5e";
+
+function SentimentBar({ buyPct, sellPct, height = 22 }) {
+  const buy = buyPct == null ? 50 : buyPct;
+  const sell = sellPct == null ? 50 : sellPct;
+  return <div className="relative flex-1 overflow-hidden rounded" style={{ height }}>
+    <div className="flex h-full w-full">
+      <div className="flex items-center justify-start pl-2 text-[11px] font-semibold text-white" style={{ width: `${buy}%`, background: SSI_BUY_COLOR }}>
+        {buy >= 12 && `${buy.toFixed(1)}%`}
+      </div>
+      <div className="flex items-center justify-end pr-2 text-[11px] font-semibold text-white" style={{ width: `${sell}%`, background: SSI_SELL_COLOR }}>
+        {sell >= 12 && `${sell.toFixed(1)}%`}
+      </div>
+    </div>
+    <div className="pointer-events-none absolute inset-y-0 left-1/2 w-px bg-slate-950/50"/>
+  </div>;
+}
+
+function SSI() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookback, setLookback] = useState(7);
+  const [topN, setTopN] = useState(20);
+  const [grouping, setGrouping] = useState("pairs"); // pairs | brokers
+  const [metric, setMetric] = useState("vol"); // vol | count
+  const [drillSymbol, setDrillSymbol] = useState("EURUSD");
+  const [symFilter, setSymFilter] = useState("");
+  const [sortBy, setSortBy] = useState("activity"); // activity | buy | sell | az
+
+  const load = useCallback((lb, tn, sym) => {
+    fetch(new URL(`/api/brokertech/ssi?lookbackDays=${lb}&topN=${tn}&symbol=${encodeURIComponent(sym)}`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(lookback, topN, drillSymbol); }, [load, lookback, topN, drillSymbol]);
+  useEffect(() => { if (!auto) return; const id = setInterval(() => load(lookback, topN, drillSymbol), 30000); return () => clearInterval(id); }, [auto, load, lookback, topN, drillSymbol]);
+
+  const lastSymbols = useRef([]);
+  if (data?.allSymbols?.length) lastSymbols.current = data.allSymbols;
+  const allSymbols = data?.allSymbols?.length ? data.allSymbols : lastSymbols.current;
+  const symbolOptions = useMemo(() => {
+    const needle = symFilter.trim().toLowerCase();
+    let out = needle ? allSymbols.filter(s => s.symbol.toLowerCase().includes(needle)) : allSymbols;
+    if (!out.some(s => s.symbol === drillSymbol)) { const cur = allSymbols.find(s => s.symbol === drillSymbol); out = cur ? [cur, ...out] : out; }
+    return out;
+  }, [allSymbols, symFilter, drillSymbol]);
+
+  const m = data?.meta || {};
+  const buyKey = metric === "vol" ? "buyPctVol" : "buyPctCount";
+  const sellKey = metric === "vol" ? "sellPctVol" : "sellPctCount";
+  const actKey = metric === "vol" ? "totalLots" : "nTrades";
+
+  const bySymbol = data?.bySymbol || [];
+  const byBroker = data?.byBroker || [];
+  const rows = grouping === "pairs" ? bySymbol : byBroker;
+  const labelKey = grouping === "pairs" ? "symbol" : "brokerTag";
+
+  const sortedRows = useMemo(() => {
+    const out = [...rows];
+    if (sortBy === "buy") out.sort((a, b) => (b[buyKey] || 0) - (a[buyKey] || 0));
+    else if (sortBy === "sell") out.sort((a, b) => (b[sellKey] || 0) - (a[sellKey] || 0));
+    else if (sortBy === "az") out.sort((a, b) => String(a[labelKey]).localeCompare(String(b[labelKey])));
+    else out.sort((a, b) => (b[actKey] || 0) - (a[actKey] || 0)); // activity (API default order, re-applied after grouping switch)
+    return out;
+  }, [rows, sortBy, buyKey, sellKey, actKey, labelKey]);
+
+  // pooled "all brokers" reference row - summed across every broker
+  // trading drillSymbol, not a naive average of each broker's own % (which
+  // would let a 2-trade broker count as much as a 17,000-trade one).
+  const pooled = useMemo(() => {
+    if (!byBroker.length) return null;
+    const t = byBroker.reduce((a, r) => ({
+      buyLots: a.buyLots + (r.buyLots || 0), sellLots: a.sellLots + (r.sellLots || 0),
+      buyN: a.buyN + (r.buyN || 0), sellN: a.sellN + (r.sellN || 0),
+      nTrades: a.nTrades + (r.nTrades || 0), totalLots: a.totalLots + (r.totalLots || 0),
+    }), { buyLots: 0, sellLots: 0, buyN: 0, sellN: 0, nTrades: 0, totalLots: 0 });
+    const totLots = t.buyLots + t.sellLots, totN = t.buyN + t.sellN;
+    return {
+      buyPctVol: totLots > 0 ? 100 * t.buyLots / totLots : null, sellPctVol: totLots > 0 ? 100 * t.sellLots / totLots : null,
+      buyPctCount: totN > 0 ? 100 * t.buyN / totN : null, sellPctCount: totN > 0 ? 100 * t.sellN / totN : null,
+      nTrades: t.nTrades, totalLots: t.totalLots,
+    };
+  }, [byBroker]);
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">SSI · <span className="text-slate-500">.brk.ssi.* · recent long/short flow by volume, not a live open-interest snapshot</span></span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[{ k: "pairs", l: "Pairs" }, { k: "brokers", l: "Brokers" }].map(o => <button key={o.k} onClick={() => setGrouping(o.k)}
+          className={`px-2.5 py-1 ${grouping === o.k ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{o.l}</button>)}
+      </span>
+      {grouping === "brokers" && <span className="flex items-center gap-1.5">
+        <input value={symFilter} onChange={e => setSymFilter(e.target.value)} placeholder="filter…"
+          className="w-20 rounded border border-slate-800 bg-slate-950/60 px-1.5 py-1 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-cyan-700"/>
+        <select value={drillSymbol} onChange={e => setDrillSymbol(e.target.value)}
+          className="rounded border border-slate-700 bg-slate-950 px-1.5 py-1 text-slate-200">
+          {symbolOptions.map(s => <option key={s.symbol} value={s.symbol}>{s.symbol} ({fmtCount(s.nTrades)})</option>)}
+        </select>
+      </span>}
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[7, 14, 30, 90].map(d => <button key={d} onClick={() => setLookback(d)}
+          className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      {grouping === "pairs" && <span className="flex items-center gap-1.5 text-slate-500">top
+        <span className="flex overflow-hidden rounded border border-slate-800">
+          {[10, 20, 30].map(n => <button key={n} onClick={() => setTopN(n)}
+            className={`px-2 py-1 ${topN === n ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{n}</button>)}
+        </span>
+      </span>}
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[{ k: "vol", l: "by volume" }, { k: "count", l: "by count" }].map(o => <button key={o.k} onClick={() => setMetric(o.k)}
+          className={`px-2 py-1 ${metric === o.k ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{o.l}</button>)}
+      </span>
+      <span className="flex items-center gap-1.5 text-slate-500"><SlidersHorizontal size={12}/> sort
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="rounded border border-slate-700 bg-slate-950 px-1.5 py-1 text-slate-200">
+          <option value="activity">activity</option>
+          <option value="buy">buy %</option>
+          <option value="sell">sell %</option>
+          <option value="az">A-Z</option>
+        </select>
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(lookback, topN, drillSymbol)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {m.sDate && <span className="tabular-nums">{m.sDate} → {m.eDate}</span>}
+        {data && <span className="text-slate-500">{fmtCount(m.nTradeRows)} trades in window</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">updated {updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/brokertech/ssi — {err}
+      <div className="mt-1 text-rose-400/70">needs retailR_hdb (or brokerTech_hdb) with modules/analytics/brokerTech/brokerTech.q in its hdb.json libraries, and OPENQ_BROKERTECH_HDB set.</div></div>}
+
+    {data && <>
+      <div className="rounded border border-amber-900/60 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-300/80">
+        This archive is trade HISTORY, not a live position feed - every real trade already has a close time, so there's no "currently open" snapshot to read a textbook SSI from. What's shown is the honest proxy: of everything OPENED in the last {lookback} days, what share was long (buy) vs short (sell) - {metric === "vol" ? "weighted by lots traded" : "by number of trades"}. A reading far from 50/50 still means the same thing a real SSI does: one side of the book is crowded.
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label={grouping === "pairs" ? "Pairs shown" : `${drillSymbol} · brokerages`} value={fmtCount(rows.length)} icon={Gauge}
+          sub={grouping === "pairs" ? `top ${topN} by activity` : "trading this symbol"}/>
+        <StatTile label={grouping === "pairs" ? "Most crowded long" : `${drillSymbol} book-wide`}
+          value={grouping === "pairs"
+            ? (() => { const b = [...bySymbol].sort((a, b2) => (b2[buyKey] || 0) - (a[buyKey] || 0))[0]; return b ? `${b.symbol} ${b[buyKey].toFixed(0)}%` : "—"; })()
+            : (pooled?.[buyKey] != null ? `${pooled[buyKey].toFixed(1)}% long` : "—")}
+          icon={TrendingUp} tone="warn"/>
+        <StatTile label={grouping === "pairs" ? "Most crowded short" : `${drillSymbol} trades in window`}
+          value={grouping === "pairs"
+            ? (() => { const s = [...bySymbol].sort((a, b2) => (b2[sellKey] || 0) - (a[sellKey] || 0))[0]; return s ? `${s.symbol} ${s[sellKey].toFixed(0)}%` : "—"; })()
+            : fmtCount(pooled?.nTrades)}
+          icon={TrendingDown} tone="pos"/>
+        <StatTile label="Window" value={`${lookback}d`} icon={CalendarDays} sub={`topN=${topN} · ${metric === "vol" ? "volume-weighted" : "count-weighted"}`}/>
+      </div>
+
+      <section className="panel overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
+          <span className="font-semibold">{grouping === "pairs" ? `Top ${topN} most-traded symbols` : `${drillSymbol} by brokerage`}</span>
+          <span className="flex items-center gap-1.5 text-[11px] text-slate-500">
+            <span className="inline-flex items-center gap-1"><span className="h-2 w-3 rounded-sm" style={{ background: SSI_BUY_COLOR }}/>buy / long</span>
+            <span className="inline-flex items-center gap-1"><span className="h-2 w-3 rounded-sm" style={{ background: SSI_SELL_COLOR }}/>sell / short</span>
+          </span>
+        </div>
+        <div className="divide-y divide-slate-800/60">
+          {sortedRows.map(r => <div key={r[labelKey]}
+            onClick={() => { if (grouping === "pairs") { setDrillSymbol(r.symbol); setGrouping("brokers"); } }}
+            className={`flex items-center gap-3 px-4 py-2 ${grouping === "pairs" ? "cursor-pointer hover:bg-slate-900/50" : ""}`}>
+            <span className="w-24 shrink-0 truncate font-medium text-slate-200">{r[labelKey]}</span>
+            <SentimentBar buyPct={r[buyKey]} sellPct={r[sellKey]}/>
+            <span className="w-20 shrink-0 text-right text-[11px] tabular-nums text-slate-500">{fmtCount(r[actKey])}{metric === "vol" ? " lots" : " trds"}</span>
+            {grouping === "pairs" && <ChevronRight size={14} className="shrink-0 text-slate-600"/>}
+          </div>)}
+          {!sortedRows.length && <div className="px-4 py-8 text-center text-sm text-slate-600">no data for this view</div>}
+          {grouping === "brokers" && pooled && <div className="flex items-center gap-3 border-t-2 border-dashed border-slate-700 bg-slate-900/40 px-4 py-2">
+            <span className="w-24 shrink-0 truncate font-semibold text-slate-300">All brokers</span>
+            <SentimentBar buyPct={pooled[buyKey]} sellPct={pooled[sellKey]}/>
+            <span className="w-20 shrink-0 text-right text-[11px] tabular-nums text-slate-500">{fmtCount(pooled[actKey])}{metric === "vol" ? " lots" : " trds"}</span>
+            <span className="w-[14px] shrink-0"/>
+          </div>}
+        </div>
+      </section>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading sentiment…</div>}
+  </div>;
+}
+
+// ---- Predicted Risk Score (AI: cold-start toxicity classifier) --------
+// Productionizes the classifier prototyped in openq-notebook/Untitled.ipynb
+// (see .brk.ml.* in brokerTech.q + openq-notebook/train_risk_classifier.py):
+// from just a provider's first 30 days of trading, predicts the
+// probability the deterministic .brk.tox.score formula will EVENTUALLY
+// rate them MEDIUM risk or worse over the following 150 days - a genuine
+// leading indicator, walk-forward out-of-time validated (10 rolling
+// chronological folds: train = accounts that started earlier, test =
+// accounts that started later, never the reverse). Ships as a logistic
+// regression baked into brokerTech.q as plain weights + sigmoid, so live
+// scoring needs no python process; a gradient-boosted model scored a bit
+// higher in the same held-out comparison but isn't natively portable to
+// q, so it stayed the validation sanity check, not the shipped model.
+const RISK_BUCKET_COLOR = TOX_BUCKET_COLOR; // shared vocabulary with Toxic Analysis
+const riskGapTone = (v) => (v == null ? "text-slate-500" : v >= 0.3 ? "text-rose-400" : v > 0 ? "text-amber-400" : "text-slate-500");
+
+function PredictedRiskScore() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookback, setLookback] = useState(30);
+  const [onlyWarn, setOnlyWarn] = useState(false);
+  const [q, setQ] = useState("");
+
+  const load = useCallback((lb) => {
+    fetch(new URL(`/api/brokertech/mlrisk?lookbackDays=${lb}`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(lookback); }, [load, lookback]);
+  useEffect(() => { if (!auto) return; const id = setInterval(() => load(lookback), 60000); return () => clearInterval(id); }, [auto, load, lookback]);
+
+  const m = data?.meta || {};
+  const v = data?.validation || {};
+  const watchlist = data?.watchlist || [];
+  const importance = data?.importance || [];
+  const maxAbsCoef = Math.max(...importance.map(f => f.absCoef), 1e-9);
+
+  const filtered = useMemo(() => {
+    let out = watchlist;
+    if (onlyWarn) out = out.filter(r => r.earlyWarning);
+    const needle = q.trim();
+    if (needle) out = out.filter(r => String(r.signalId).includes(needle));
+    return out;
+  }, [watchlist, onlyWarn, q]);
+
+  const nWarn = watchlist.filter(r => r.earlyWarning).length;
+
+  const RiskTT = ({ active, payload }) => {
+    if (!active || !payload?.length) return null;
+    const r = payload[0].payload;
+    return <div style={TT} className="p-2">
+      <div className="font-semibold text-slate-200">signal {r.signalId}</div>
+      <div style={{ color: RISK_BUCKET_COLOR[r.bucket] }}>rule: {r.bucket} ({bkNum(r.toxScore, 3)})</div>
+      <div className="text-cyan-300">model: {(r.mlProb * 100).toFixed(1)}%</div>
+      {r.earlyWarning && <div className="text-amber-400">ahead of the rule</div>}
+    </div>;
+  };
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">Predicted Risk Score · <span className="text-slate-500">.brk.ml.* cold-start classifier · scores every active provider from ~{lookback}d of recent behaviour</span></span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[30, 60, 90, 180].map(d => <button key={d} onClick={() => setLookback(d)}
+          className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={onlyWarn} onChange={e => setOnlyWarn(e.target.checked)}/> early warnings only</label>
+      <input value={q} onChange={e => setQ(e.target.value)} placeholder="signalId…"
+        className="w-28 rounded border border-slate-800 bg-slate-950/60 px-1.5 py-1 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-cyan-700"/>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(lookback)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {m.sDate && <span className="tabular-nums">{m.sDate} → {m.eDate}</span>}
+        {data && <span className="text-slate-500">{fmtCount(m.nScored)} providers scored</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">updated {updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/brokertech/mlrisk — {err}
+      <div className="mt-1 text-rose-400/70">needs retailR_hdb (or brokerTech_hdb) with modules/analytics/brokerTech/brokerTech.q in its hdb.json libraries, and OPENQ_BROKERTECH_HDB set.</div></div>}
+
+    {data && <>
+      <div className="rounded border border-cyan-900/60 bg-cyan-950/20 px-3 py-2 text-[11px] text-cyan-300/80">
+        Trained on {fmtCount(v.nAccounts)} historical accounts to predict, from just their first 30 days of trading, whether .brk.tox.score would EVENTUALLY rate them MEDIUM risk or worse over the following 150 days - validated with {v.nFolds} rolling out-of-time folds (train = accounts that started earlier, test = accounts that started later, never the reverse): mean AUC {bkNum(v.meanAuc, 2)} (±{bkNum(v.stdAuc, 2)}), precision in the model's own top decile {bkNum(v.meanPrecisionAtDecile * 100, 1)}% against a {bkNum(v.meanBaseRate * 100, 1)}% base rate - a {bkNum(v.lift, 1)}x lift. Ships as a logistic regression (plain weights + sigmoid, native to q, no live python process); a gradient-boosted model scored a bit higher in the same held-out comparison ({bkNum(v.gbtAuc, 2)} vs {bkNum(v.logitAucSameFold, 2)} AUC) but isn't portable this way, so it stayed the sanity check, not the shipped model.
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label="Providers scored" value={fmtCount(watchlist.length)} icon={Sparkles} sub={`${lookback}d window`}/>
+        <StatTile label="Early warnings" value={fmtCount(nWarn)} icon={Radar} tone={nWarn ? "warn" : "mute"}
+          sub="model flags it, rule still says LOW"/>
+        <StatTile label="Out-of-time AUC" value={bkNum(v.meanAuc, 2)} icon={Brain} sub={`±${bkNum(v.stdAuc, 2)} across ${v.nFolds} folds`}/>
+        <StatTile label="Precision @ decile" value={`${bkNum(v.meanPrecisionAtDecile * 100, 1)}%`} icon={TrendingUp} tone="pos"
+          sub={`vs ${bkNum(v.meanBaseRate * 100, 1)}% base rate · ${bkNum(v.lift, 1)}x lift`}/>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-[1fr_1.3fr]">
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Feature importance <span className="text-xs font-normal text-slate-500">standardized logistic-regression coefficients</span></div>
+          <div className="space-y-1">
+            {importance.map(f => <div key={f.feature} className="flex items-center gap-2 text-xs">
+              <span className="w-28 shrink-0 truncate text-slate-400">{f.feature}</span>
+              <div className="h-3 flex-1 overflow-hidden rounded bg-slate-800">
+                <div className="h-full rounded" style={{ width: `${100 * f.absCoef / maxAbsCoef}%`, background: f.coef >= 0 ? "#f43f5e" : "#34d399" }}/>
+              </div>
+              <span className="w-14 shrink-0 text-right tabular-nums text-slate-500">{f.coef >= 0 ? "+" : ""}{bkNum(f.coef, 2)}</span>
+            </div>)}
+          </div>
+          <div className="mt-2 flex items-center gap-3 text-[11px] text-slate-500">
+            <span className="inline-flex items-center gap-1"><span className="h-2 w-3 rounded-sm bg-rose-500"/>pushes risk up</span>
+            <span className="inline-flex items-center gap-1"><span className="h-2 w-3 rounded-sm bg-emerald-500"/>pushes risk down</span>
+          </div>
+        </section>
+
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Model vs. rule, side by side <span className="text-xs font-normal text-slate-500">x = current toxScore (rule) · y = current mlProb (model) · above the diagonal = model already sees more risk than the rule does today</span></div>
+          <div className="h-72"><ResponsiveContainer width="100%" height="100%">
+            <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36"/>
+              <XAxis type="number" dataKey="toxScore" domain={[0, 1]} stroke="#566673" fontSize={10} name="toxScore"/>
+              <YAxis type="number" dataKey="mlProb" domain={[0, 1]} stroke="#566673" fontSize={10} name="mlProb"/>
+              <ReferenceLine segment={[{ x: 0, y: 0 }, { x: 1, y: 1 }]} stroke="#37505f" strokeDasharray="4 3"/>
+              <Tooltip content={<RiskTT/>}/>
+              <Scatter data={watchlist} isAnimationActive={false}>
+                {watchlist.map((r, i) => <Cell key={i} fill={RISK_BUCKET_COLOR[r.bucket] || "#64748b"} fillOpacity={r.earlyWarning ? 0.95 : 0.3}/>)}
+              </Scatter>
+            </ScatterChart>
+          </ResponsiveContainer></div>
+        </section>
+      </div>
+
+      <section className="panel overflow-hidden">
+        <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
+          <span className="font-semibold">Watchlist <span className="text-xs font-normal text-slate-500">sorted: early warnings first, then by mlProb</span></span>
+          <span className="text-[11px] text-slate-500">{fmtCount(filtered.length)} of {fmtCount(watchlist.length)}</span>
+        </div>
+        <div className="max-h-[28rem] overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-slate-950/95 text-slate-500">
+              <tr>
+                <th className="px-4 py-1.5 text-left font-medium">signal</th>
+                <th className="px-3 py-1.5 text-right font-medium">mlProb</th>
+                <th className="px-3 py-1.5 text-right font-medium">toxScore</th>
+                <th className="px-3 py-1.5 text-left font-medium">bucket</th>
+                <th className="px-3 py-1.5 text-right font-medium">ahead of rule</th>
+                <th className="px-3 py-1.5 text-center font-medium">warning</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/60">
+              {filtered.slice(0, 300).map(r => <tr key={r.signalId} className={r.earlyWarning ? "bg-amber-950/10" : ""}>
+                <td className="px-4 py-1.5 tabular-nums text-slate-300">{r.signalId}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums font-semibold text-cyan-300">{(r.mlProb * 100).toFixed(1)}%</td>
+                <td className="px-3 py-1.5 text-right tabular-nums text-slate-400">{bkNum(r.toxScore, 3)}</td>
+                <td className="px-3 py-1.5"><span className="rounded px-1.5 py-0.5 text-[10px] font-semibold" style={{ background: `${RISK_BUCKET_COLOR[r.bucket]}22`, color: RISK_BUCKET_COLOR[r.bucket] }}>{r.bucket}</span></td>
+                <td className={`px-3 py-1.5 text-right tabular-nums ${riskGapTone(r.aheadOfRule)}`}>{r.aheadOfRule >= 0 ? "+" : ""}{bkNum(r.aheadOfRule, 2)}</td>
+                <td className="px-3 py-1.5 text-center">{r.earlyWarning && <span className="text-amber-400">⚠</span>}</td>
+              </tr>)}
+              {!filtered.length && <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-600">no providers match</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading risk scores…</div>}
+  </div>;
+}
+
+// ---- Predicted Profitability Score --------------------------------------
+// Predicted Risk Score's same batch cold-start framework (.brk.ml.priv.
+// windowFeatures, logistic regression, walk-forward out-of-time validation)
+// aimed at the desk's other cold-start question: not "will this become a
+// risk problem", but "will this be worth keeping on the book" - .brk.profit.*
+// predicts whether a brand-new account will turn into a net-losing client
+// (profitable to the B-book) from just its first 30 days.
+const profitGapTone = (v) => (v == null ? "text-slate-500" : v >= 0.5 ? "text-emerald-400" : v > 0 ? "text-cyan-400" : "text-slate-500");
+
+function PredictedProfitabilityScore() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookback, setLookback] = useState(30);
+  const [onlyOpp, setOnlyOpp] = useState(false);
+  const [q, setQ] = useState("");
+
+  const load = useCallback((lb) => {
+    fetch(new URL(`/api/brokertech/profitscore?lookbackDays=${lb}`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(lookback); }, [load, lookback]);
+  useEffect(() => { if (!auto) return; const id = setInterval(() => load(lookback), 60000); return () => clearInterval(id); }, [auto, load, lookback]);
+
+  const m = data?.meta || {};
+  const v = data?.validation || {};
+  const watchlist = data?.watchlist || [];
+  const importance = data?.importance || [];
+  const maxAbsCoef = Math.max(...importance.map(f => f.absCoef), 1e-9);
+
+  const filtered = useMemo(() => {
+    let out = watchlist;
+    if (onlyOpp) out = out.filter(r => r.opportunity);
+    const needle = q.trim();
+    if (needle) out = out.filter(r => String(r.signalId).includes(needle));
+    return out;
+  }, [watchlist, onlyOpp, q]);
+
+  const nOpp = watchlist.filter(r => r.opportunity).length;
+
+  const ProfitTT = ({ active, payload }) => {
+    if (!active || !payload?.length) return null;
+    const r = payload[0].payload;
+    return <div style={TT} className="p-2">
+      <div className="font-semibold text-slate-200">signal {r.signalId}</div>
+      <div className={r.totalRev >= 0 ? "text-emerald-400" : "text-rose-400"}>current: ${fmtCount(Math.round(r.totalRev))} this window</div>
+      <div className="text-cyan-300">model: {(r.profitProb * 100).toFixed(1)}% chance of becoming a net loser</div>
+      {r.opportunity && <div className="text-amber-400">model sees it, current revenue doesn't yet</div>}
+    </div>;
+  };
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">Predicted Profitability Score · <span className="text-slate-500">.brk.profit.* cold-start classifier · scores every active provider from ~{lookback}d of recent behaviour</span></span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[30, 60, 90, 180].map(d => <button key={d} onClick={() => setLookback(d)}
+          className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={onlyOpp} onChange={e => setOnlyOpp(e.target.checked)}/> opportunities only</label>
+      <input value={q} onChange={e => setQ(e.target.value)} placeholder="signalId…"
+        className="w-28 rounded border border-slate-800 bg-slate-950/60 px-1.5 py-1 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-cyan-700"/>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(lookback)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {m.sDate && <span className="tabular-nums">{m.sDate} → {m.eDate}</span>}
+        {data && <span className="text-slate-500">{fmtCount(m.nScored)} providers scored</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">updated {updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/brokertech/profitscore — {err}
+      <div className="mt-1 text-rose-400/70">needs retailR_hdb (or brokerTech_hdb) with modules/analytics/brokerTech/brokerTech.q in its hdb.json libraries, and OPENQ_BROKERTECH_HDB set.</div></div>}
+
+    {data && <>
+      <div className="rounded border border-emerald-900/60 bg-emerald-950/20 px-3 py-2 text-[11px] text-emerald-300/80">
+        Same cold-start framework as Predicted Risk Score, aimed at the desk's other question: not "will this become a risk problem", but "will this be worth keeping on the book". Trained on {fmtCount(v.nAccounts)} historical accounts to predict, from just their first 30 days of trading, whether they'd turn into a net-LOSING client (profitable to the B-book, per .brk.rev.summary's bBookPnl) over the following 150 days - validated the same way, {v.nFolds} rolling out-of-time folds: mean AUC {bkNum(v.meanAuc, 2)} (±{bkNum(v.stdAuc, 2)}), precision in the model's own top decile {bkNum(v.meanPrecisionAtDecile * 100, 1)}% against a {bkNum(v.meanBaseRate * 100, 1)}% base rate - a {bkNum(v.lift, 1)}x lift. This label runs far more balanced than toxicity's (~27% average fold base rate vs ~7%), which is also why its fold-to-fold AUC is noticeably steadier (±{bkNum(v.stdAuc, 2)} here). Same logistic-regression-in-native-q shipping choice, for the same reason - a GBT scored a bit higher in the same held-out comparison ({bkNum(v.gbtAuc, 2)} vs {bkNum(v.logitAucSameFold, 2)} AUC) but isn't portable this way.
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label="Providers scored" value={fmtCount(watchlist.length)} icon={TrendingUp} sub={`${lookback}d window`}/>
+        <StatTile label="Opportunities" value={fmtCount(nOpp)} icon={Radar} tone={nOpp ? "pos" : "mute"}
+          sub="model flags it, not yet revenue-positive"/>
+        <StatTile label="Out-of-time AUC" value={bkNum(v.meanAuc, 2)} icon={Brain} sub={`±${bkNum(v.stdAuc, 2)} across ${v.nFolds} folds`}/>
+        <StatTile label="Precision @ decile" value={`${bkNum(v.meanPrecisionAtDecile * 100, 1)}%`} icon={CircleDollarSign} tone="pos"
+          sub={`vs ${bkNum(v.meanBaseRate * 100, 1)}% base rate · ${bkNum(v.lift, 1)}x lift`}/>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-[1fr_1.3fr]">
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Feature importance <span className="text-xs font-normal text-slate-500">standardized logistic-regression coefficients</span></div>
+          <div className="space-y-1">
+            {importance.map(f => <div key={f.feature} className="flex items-center gap-2 text-xs">
+              <span className="w-28 shrink-0 truncate text-slate-400">{f.feature}</span>
+              <div className="h-3 flex-1 overflow-hidden rounded bg-slate-800">
+                <div className="h-full rounded" style={{ width: `${100 * f.absCoef / maxAbsCoef}%`, background: f.coef >= 0 ? "#22c55e" : "#f97316" }}/>
+              </div>
+              <span className="w-14 shrink-0 text-right tabular-nums text-slate-500">{f.coef >= 0 ? "+" : ""}{bkNum(f.coef, 2)}</span>
+            </div>)}
+          </div>
+          <div className="mt-2 flex items-center gap-3 text-[11px] text-slate-500">
+            <span className="inline-flex items-center gap-1"><span className="h-2 w-3 rounded-sm bg-emerald-500"/>pushes toward net-loser (profitable to B-book)</span>
+            <span className="inline-flex items-center gap-1"><span className="h-2 w-3 rounded-sm bg-orange-500"/>pushes toward net-winner (better A-booked)</span>
+          </div>
+        </section>
+
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Model vs. current revenue <span className="text-xs font-normal text-slate-500">x = this window's actual desk revenue · y = predicted probability of becoming a net loser · top-left = model sees an opportunity current revenue hasn't shown yet</span></div>
+          <div className="h-72"><ResponsiveContainer width="100%" height="100%">
+            <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36"/>
+              <XAxis type="number" dataKey="totalRev" stroke="#566673" fontSize={10} name="totalRev" tickFormatter={fmtCount}/>
+              <YAxis type="number" dataKey="profitProb" domain={[0, 1]} stroke="#566673" fontSize={10} name="profitProb"/>
+              <ReferenceLine x={0} stroke="#37505f" strokeDasharray="4 3"/>
+              <Tooltip content={<ProfitTT/>}/>
+              <Scatter data={watchlist} isAnimationActive={false}>
+                {watchlist.map((r, i) => <Cell key={i} fill={r.totalRev >= 0 ? "#34d399" : "#64748b"} fillOpacity={r.opportunity ? 0.95 : 0.3}/>)}
+              </Scatter>
+            </ScatterChart>
+          </ResponsiveContainer></div>
+        </section>
+      </div>
+
+      <section className="panel overflow-hidden">
+        <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
+          <span className="font-semibold">Watchlist <span className="text-xs font-normal text-slate-500">sorted: opportunities first, then by profitProb</span></span>
+          <span className="text-[11px] text-slate-500">{fmtCount(filtered.length)} of {fmtCount(watchlist.length)}</span>
+        </div>
+        <div className="max-h-[28rem] overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-slate-950/95 text-slate-500">
+              <tr>
+                <th className="px-4 py-1.5 text-left font-medium">signal</th>
+                <th className="px-3 py-1.5 text-right font-medium">profitProb</th>
+                <th className="px-3 py-1.5 text-right font-medium">current rev</th>
+                <th className="px-3 py-1.5 text-right font-medium">client P&amp;L</th>
+                <th className="px-3 py-1.5 text-right font-medium">ahead of current</th>
+                <th className="px-3 py-1.5 text-center font-medium">opportunity</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/60">
+              {filtered.slice(0, 300).map(r => <tr key={r.signalId} className={r.opportunity ? "bg-emerald-950/10" : ""}>
+                <td className="px-4 py-1.5 tabular-nums text-slate-300">{r.signalId}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums font-semibold text-cyan-300">{(r.profitProb * 100).toFixed(1)}%</td>
+                <td className={`px-3 py-1.5 text-right tabular-nums ${r.totalRev >= 0 ? "text-emerald-400" : "text-rose-400"}`}>${fmtCount(Math.round(r.totalRev))}</td>
+                <td className={`px-3 py-1.5 text-right tabular-nums ${r.clientNetProfit >= 0 ? "text-slate-300" : "text-slate-500"}`}>${fmtCount(Math.round(r.clientNetProfit))}</td>
+                <td className={`px-3 py-1.5 text-right tabular-nums ${profitGapTone(r.aheadOfCurrent)}`}>{r.aheadOfCurrent >= 0 ? "+" : ""}{bkNum(r.aheadOfCurrent, 2)}</td>
+                <td className="px-3 py-1.5 text-center">{r.opportunity && <span className="text-emerald-400">★</span>}</td>
+              </tr>)}
+              {!filtered.length && <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-600">no providers match</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading profitability scores…</div>}
+  </div>;
+}
+
+// ---- Predicted Time of Trading (hourly activity forecast) --------------
+// Desk-wide hourly activity forecast, not a per-account model like the
+// other three AI pages: .brk.hourly.* is a seasonal-naive time-series
+// model, entirely native q - predicted count for an hour = the historical
+// median of that same (day-of-week, hour) bucket over the trailing N
+// same-weekday occurrences. Ships alongside the day-of-week x hour
+// heatmap (the real "set of analytics" this page is also for) and a
+// walk-forward backtest against a simpler flat (no-day-of-week) baseline.
+// kdb+ epoch day-of-week convention: 0=Saturday .. 6=Friday (see
+// .brk.hourly.priv.dow's header in brokerTech.q).
+const DOW_LABELS = ["Sat", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri"];
+const hourLabel = (h) => `${String(h).padStart(2, "0")}:00`;
+
+function heatColor(v, max) {
+  if (v == null || !max) return "#0f1a23";
+  const t = Math.max(0, Math.min(1, v / max));
+  // dark slate -> cyan, matching the app's accent
+  const r = Math.round(15 + t * (34 - 15));
+  const g = Math.round(26 + t * (211 - 26));
+  const b = Math.round(35 + t * (238 - 35));
+  return `rgb(${r},${g},${b})`;
+}
+
+function PredictedTimeOfTrading() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookbackWeeks, setLookbackWeeks] = useState(8);
+  const [hoverCell, setHoverCell] = useState(null);
+  const [pickedDate, setPickedDate] = useState(""); // "" = latest available date
+
+  const load = useCallback((lbw, date) => {
+    const qs = new URLSearchParams({ lookbackWeeks: lbw });
+    if (date) qs.set("date", date);
+    fetch(new URL(`/api/brokertech/hourly?${qs}`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(lookbackWeeks, pickedDate); }, [load, lookbackWeeks, pickedDate]);
+  useEffect(() => {
+    if (!auto || pickedDate) return; // auto-refresh only makes sense while following the latest date
+    const id = setInterval(() => load(lookbackWeeks, pickedDate), 120000);
+    return () => clearInterval(id);
+  }, [auto, load, lookbackWeeks, pickedDate]);
+
+  const m = data?.meta || {};
+  const bt = data?.backtest || {};
+  const today = data?.today || [];
+  const heatmap = data?.heatmap || [];
+  const anomalies = data?.anomalies || [];
+  const asOfDate = today[0]?.asOfDate ? today[0].asOfDate.slice(0, 10) : null;
+  const isHistorical = !!pickedDate;
+
+  const heatGrid = useMemo(() => {
+    const byKey = new Map(heatmap.map(r => [`${r.dow}:${r.hr}`, r]));
+    const max = Math.max(...heatmap.map(r => r.avgNTrades), 1e-9);
+    return { byKey, max };
+  }, [heatmap]);
+
+  const HourTT = ({ active, payload }) => {
+    if (!active || !payload?.length) return null;
+    const r = payload[0].payload;
+    return <div style={TT} className="p-2">
+      <div className="font-semibold text-slate-200">{hourLabel(r.hr)}</div>
+      <div className="text-cyan-300">predicted: {bkNum(r.predNTrades, 1)} trades (±{bkNum(r.sdNTrades, 0)}, {r.nObs} weeks)</div>
+      {r.isPast && <div className={Math.abs(r.zScore) >= 1.5 ? "text-amber-400" : "text-slate-400"}>actual: {r.actualNTrades} trades (z {bkNum(r.zScore, 2)})</div>}
+      {!r.isPast && <div className="text-slate-500">still in progress</div>}
+    </div>;
+  };
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">Predicted Time of Trading · <span className="text-slate-500">.brk.hourly.* seasonal forecast · trailing same-weekday history</span></span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[8, 12, 16, 20].map(w => <button key={w} onClick={() => setLookbackWeeks(w)}
+          className={`px-2 py-1 ${lookbackWeeks === w ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{w}w</button>)}
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400">
+        compare date
+        <input type="date" value={pickedDate} max={m.latestDate || undefined}
+          onChange={e => setPickedDate(e.target.value)}
+          className="rounded border border-slate-800 bg-slate-950/60 px-1.5 py-1 text-slate-200 focus:outline-none focus:ring-1 focus:ring-cyan-700"/>
+      </label>
+      {isHistorical && <button onClick={() => setPickedDate("")}
+        className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-cyan-300 hover:bg-slate-900"><RotateCcw size={12}/> latest</button>}
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} disabled={isHistorical} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(lookbackWeeks, pickedDate)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {isHistorical && <span className="badge bg-amber-950 text-amber-300">historical view</span>}
+        {asOfDate && <span className="tabular-nums">as of {asOfDate}</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && !isHistorical && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">updated {updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/brokertech/hourly — {err}
+      <div className="mt-1 text-rose-400/70">needs retailR_hdb (or brokerTech_hdb) with modules/analytics/brokerTech/brokerTech.q in its hdb.json libraries, and OPENQ_BROKERTECH_HDB set.</div></div>}
+
+    {data && <>
+      <div className="rounded border border-cyan-900/60 bg-cyan-950/20 px-3 py-2 text-[11px] text-cyan-300/80">
+        A seasonal-naive forecast, entirely native q: predicted trade count for an hour = the median of that same (day-of-week, hour) bucket over the trailing {m.lookbackWeeks} same-weekday occurrences, using only history strictly before the day being forecast. Walk-forward backtested over the last {bt.nDays} complete days: mean absolute error {bkNum(bt.meanMae, 1)} trades/hour. Worth reporting honestly: that's essentially tied with a much simpler baseline that ignores day-of-week entirely and just uses each hour's flat historical median ({bkNum(bt.meanFlatMae, 1)} MAE, {bkNum(bt.liftVsFlat, 2)}x "lift" - under 1 means the simple baseline actually edged it out). Day-of-week doesn't add much predictive signal for this book's hourly rhythm - it still ships because the (day, hour) breakdown is genuinely useful as an analytics view on its own (see the heatmap below), not because it wins the accuracy contest.
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label="Backtest MAE" value={bkNum(bt.meanMae, 1)} icon={Hourglass} sub={`vs flat baseline ${bkNum(bt.meanFlatMae, 1)}`}/>
+        <StatTile label="Lift vs. flat" value={`${bkNum(bt.liftVsFlat, 2)}x`} icon={Scale} tone={bt.liftVsFlat >= 1 ? "pos" : "mute"}
+          sub={bt.liftVsFlat >= 1 ? "seasonal model wins" : "essentially a tie"}/>
+        <StatTile label="Anomalous hours today" value={fmtCount(anomalies.length)} icon={Radar} tone={anomalies.length ? "warn" : "mute"}
+          sub="|z| ≥ threshold vs. history"/>
+        <StatTile label="Backtest window" value={`${bt.nDays}d`} icon={History} sub={`${m.lookbackWeeks} weeks of same-weekday history`}/>
+      </div>
+
+      <section className="panel p-4">
+        <div className="mb-2 font-semibold">{isHistorical ? `${asOfDate}'s` : "Today's"} predicted vs. actual, by hour <span className="text-xs font-normal text-slate-500">bars = actual{isHistorical ? "" : " so far"} · line = seasonal forecast (history strictly before this day only) · amber = flagged anomaly</span></div>
+        <div className="h-72"><ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={today} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
+            <CartesianGrid stroke="#1e2b36"/>
+            <XAxis dataKey="hr" tickFormatter={hourLabel} stroke="#566673" fontSize={10} interval={1}/>
+            <YAxis stroke="#566673" fontSize={10}/>
+            <Tooltip content={<HourTT/>}/>
+            <Bar dataKey="actualNTrades" radius={[2, 2, 0, 0]} isAnimationActive={false}>
+              {today.map((r, i) => <Cell key={i} fill={!r.isPast ? "#334155" : Math.abs(r.zScore) >= (m.zCut || 1.5) ? "#f59e0b" : "#22d3ee"}
+                fillOpacity={r.isPast ? 0.85 : 0.35}/>)}
+            </Bar>
+            <Line type="monotone" dataKey="predNTrades" stroke="#f8fafc" strokeWidth={1.5} dot={false} isAnimationActive={false}/>
+          </ComposedChart>
+        </ResponsiveContainer></div>
+        <div className="mt-1 flex items-center gap-3 text-[11px] text-slate-500">
+          <span className="inline-flex items-center gap-1"><span className="h-2 w-3 rounded-sm bg-cyan-400"/>actual (in line with forecast)</span>
+          <span className="inline-flex items-center gap-1"><span className="h-2 w-3 rounded-sm bg-amber-500"/>actual (flagged anomaly)</span>
+          <span className="inline-flex items-center gap-1"><span className="h-2 w-3 rounded-sm bg-slate-600"/>still in progress</span>
+          <span className="inline-flex items-center gap-1"><span className="h-0.5 w-3 bg-slate-100"/>forecast</span>
+        </div>
+      </section>
+
+      {!!anomalies.length && <section className="panel overflow-hidden">
+        <div className="border-b border-slate-800 px-4 py-2 font-semibold">Flagged hours today <span className="text-xs font-normal text-slate-500">|z-score| at or above {m.zCut}</span></div>
+        <table className="w-full text-xs">
+          <thead className="text-slate-500"><tr>
+            <th className="px-4 py-1.5 text-left font-medium">hour</th>
+            <th className="px-3 py-1.5 text-right font-medium">predicted</th>
+            <th className="px-3 py-1.5 text-right font-medium">actual</th>
+            <th className="px-3 py-1.5 text-right font-medium">z-score</th>
+          </tr></thead>
+          <tbody className="divide-y divide-slate-800/60">
+            {anomalies.map(r => <tr key={r.hr}>
+              <td className="px-4 py-1.5 text-slate-300">{hourLabel(r.hr)}</td>
+              <td className="px-3 py-1.5 text-right tabular-nums text-slate-400">{bkNum(r.predNTrades, 1)}</td>
+              <td className="px-3 py-1.5 text-right tabular-nums font-semibold text-amber-400">{r.actualNTrades}</td>
+              <td className="px-3 py-1.5 text-right tabular-nums text-amber-400">{bkNum(r.zScore, 2)}</td>
+            </tr>)}
+          </tbody>
+        </table>
+      </section>}
+
+      <section className="panel p-4">
+        <div className="mb-2 flex items-baseline justify-between gap-2">
+          <div className="font-semibold">Activity heatmap <span className="text-xs font-normal text-slate-500">average trades by day-of-week × hour · {m.heatmapStart} → {m.heatmapEnd}</span></div>
+          {hoverCell && <div className="text-xs text-cyan-300">{DOW_LABELS[hoverCell.dow]} {hourLabel(hoverCell.hr)}: {bkNum(hoverCell.avgNTrades, 1)} trades/day avg ({hoverCell.nDays}d)</div>}
+        </div>
+        <div className="overflow-x-auto">
+          <div className="inline-block min-w-full">
+            <div className="grid" style={{ gridTemplateColumns: `2.5rem repeat(24, minmax(1.4rem, 1fr))` }}>
+              <div/>
+              {Array.from({ length: 24 }, (_, h) => <div key={h} className="pb-1 text-center text-[9px] text-slate-600">{h % 3 === 0 ? h : ""}</div>)}
+              {DOW_LABELS.map((label, dow) => <React.Fragment key={dow}>
+                <div className="flex items-center pr-1 text-[10px] text-slate-500">{label}</div>
+                {Array.from({ length: 24 }, (_, hr) => {
+                  const cell = heatGrid.byKey.get(`${dow}:${hr}`);
+                  return <div key={hr}
+                    onMouseEnter={() => setHoverCell(cell ? { dow, hr, ...cell } : null)}
+                    onMouseLeave={() => setHoverCell(null)}
+                    className="m-px aspect-square rounded-sm"
+                    style={{ background: heatColor(cell?.avgNTrades, heatGrid.max) }}/>;
+                })}
+              </React.Fragment>)}
+            </div>
+          </div>
+        </div>
+        <div className="mt-2 flex items-center gap-2 text-[11px] text-slate-500">
+          <span>fewer trades</span>
+          <div className="flex h-2 w-24 overflow-hidden rounded">
+            {Array.from({ length: 12 }, (_, i) => <div key={i} className="flex-1" style={{ background: heatColor(i / 11 * heatGrid.max, heatGrid.max) }}/>)}
+          </div>
+          <span>more trades</span>
+        </div>
+      </section>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading hourly forecast…</div>}
+  </div>;
+}
+
+// ---- Predicted Client Attrition ------------------------------------------
+// A third cold-start-adjacent question on top of the same .brk.ml.priv.
+// windowFeatures pipeline the other AI pages share (see .brk.churn.* in
+// brokerTech.q): not "is this account risky" or "is it profitable", but
+// "is this currently-active account about to go completely quiet". Walk-
+// forward validated by cutoff date (not account cohort-start date, since
+// this task samples many cutoffs per account) - same batch logistic
+// regression + sigmoid shipped natively in q as the other batch models.
+function PredictedClientAttrition() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookback, setLookback] = useState(30);
+  const [onlyWarn, setOnlyWarn] = useState(false);
+  const [q, setQ] = useState("");
+
+  const load = useCallback((lb) => {
+    fetch(new URL(`/api/brokertech/churn?lookbackDays=${lb}`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(lookback); }, [load, lookback]);
+  useEffect(() => { if (!auto) return; const id = setInterval(() => load(lookback), 60000); return () => clearInterval(id); }, [auto, load, lookback]);
+
+  const m = data?.meta || {};
+  const v = data?.validation || {};
+  const watchlist = data?.watchlist || [];
+  const importance = data?.importance || [];
+  const maxAbsCoef = Math.max(...importance.map(f => f.absCoef), 1e-9);
+  const staleTail = m.rawLatestDate && m.eDate && m.rawLatestDate !== m.eDate;
+
+  const filtered = useMemo(() => {
+    let out = watchlist;
+    if (onlyWarn) out = out.filter(r => r.earlyWarning);
+    const needle = q.trim();
+    if (needle) out = out.filter(r => String(r.signalId).includes(needle));
+    return out;
+  }, [watchlist, onlyWarn, q]);
+
+  const nWarn = watchlist.filter(r => r.earlyWarning).length;
+
+  const ChurnTT = ({ active, payload }) => {
+    if (!active || !payload?.length) return null;
+    const r = payload[0].payload;
+    return <div style={TT} className="p-2">
+      <div className="font-semibold text-slate-200">signal {r.signalId}</div>
+      <div className="text-cyan-300">churnProb: {(r.churnProb * 100).toFixed(1)}%</div>
+      <div className="text-slate-400">{bkNum(r.daysSinceLast, 1)}d since last trade · {fmtCount(r.nTrades)} trades</div>
+      {r.earlyWarning && <div className="text-amber-400">top-decile attrition risk</div>}
+    </div>;
+  };
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">Predicted Client Attrition · <span className="text-slate-500">.brk.churn.* classifier · scores every active provider from ~{lookback}d of recent behaviour</span></span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[30, 60, 90, 180].map(d => <button key={d} onClick={() => setLookback(d)}
+          className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={onlyWarn} onChange={e => setOnlyWarn(e.target.checked)}/> early warnings only</label>
+      <input value={q} onChange={e => setQ(e.target.value)} placeholder="signalId…"
+        className="w-28 rounded border border-slate-800 bg-slate-950/60 px-1.5 py-1 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-cyan-700"/>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(lookback)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {m.sDate && <span className="tabular-nums">{m.sDate} → {m.eDate}</span>}
+        {data && <span className="text-slate-500">{fmtCount(m.nScored)} providers scored</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">updated {updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/brokertech/churn — {err}
+      <div className="mt-1 text-rose-400/70">needs retailR_hdb (or brokerTech_hdb) with modules/analytics/brokerTech/brokerTech.q in its hdb.json libraries, and OPENQ_BROKERTECH_HDB set.</div></div>}
+
+    {staleTail && <div className="rounded border border-amber-900/60 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-300/80">
+      retailR_hdb's most recent partition ({m.rawLatestDate}) looked like an ingest gap (well under a normal day's trade volume), so this page is using {m.eDate} as "now" instead - otherwise nearly every account would look artificially dormant.
+    </div>}
+
+    {data && <>
+      <div className="rounded border border-cyan-900/60 bg-cyan-950/20 px-3 py-2 text-[11px] text-cyan-300/80">
+        Trained on {fmtCount(v.nRows)} (account, cutoff) observations to predict, from a provider's trailing {v.obsDays}d of trading behaviour as of some past cutoff, whether they'd go completely silent for the following {v.churnGapDays}d - validated with {v.nFolds} rolling out-of-time folds by cutoff date (train = observations from earlier cutoffs, test = later ones, never the reverse): mean AUC {bkNum(v.meanAuc, 2)} (±{bkNum(v.stdAuc, 2)}), precision in the model's own top decile {bkNum(v.meanPrecisionAtDecile * 100, 1)}% against a {bkNum(v.meanBaseRate * 100, 1)}% base rate - a {bkNum(v.lift, 1)}x lift. The single strongest signal is simply days-since-last-trade (the same recency signal any RFM-style churn model leans on) - but P&L trend, win rate, and trade-duration mix all carry real independent weight too, see feature importance below. Ships as a logistic regression; a gradient-boosted model scored a bit higher in the same held-out comparison ({bkNum(v.gbtAuc, 2)} vs {bkNum(v.logitAucSameFold, 2)} AUC) but isn't portable this way, so it stayed the sanity check, not the shipped model.
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label="Providers scored" value={fmtCount(watchlist.length)} icon={Users} sub={`${lookback}d window`}/>
+        <StatTile label="Early warnings" value={fmtCount(nWarn)} icon={Radar} tone={nWarn ? "warn" : "mute"}
+          sub="model's own top-decile attrition risk"/>
+        <StatTile label="Out-of-time AUC" value={bkNum(v.meanAuc, 2)} icon={Brain} sub={`±${bkNum(v.stdAuc, 2)} across ${v.nFolds} folds`}/>
+        <StatTile label="Precision @ decile" value={`${bkNum(v.meanPrecisionAtDecile * 100, 1)}%`} icon={TrendingDown} tone="pos"
+          sub={`vs ${bkNum(v.meanBaseRate * 100, 1)}% base rate · ${bkNum(v.lift, 1)}x lift`}/>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-[1fr_1.3fr]">
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Feature importance <span className="text-xs font-normal text-slate-500">standardized logistic-regression coefficients</span></div>
+          <div className="space-y-1">
+            {importance.map(f => <div key={f.feature} className="flex items-center gap-2 text-xs">
+              <span className="w-32 shrink-0 truncate text-slate-400">{f.feature}</span>
+              <div className="h-3 flex-1 overflow-hidden rounded bg-slate-800">
+                <div className="h-full rounded" style={{ width: `${100 * f.absCoef / maxAbsCoef}%`, background: f.coef >= 0 ? "#f43f5e" : "#34d399" }}/>
+              </div>
+              <span className="w-14 shrink-0 text-right tabular-nums text-slate-500">{f.coef >= 0 ? "+" : ""}{bkNum(f.coef, 2)}</span>
+            </div>)}
+          </div>
+          <div className="mt-2 flex items-center gap-3 text-[11px] text-slate-500">
+            <span className="inline-flex items-center gap-1"><span className="h-2 w-3 rounded-sm bg-rose-500"/>pushes churn risk up</span>
+            <span className="inline-flex items-center gap-1"><span className="h-2 w-3 rounded-sm bg-emerald-500"/>pushes churn risk down</span>
+          </div>
+        </section>
+
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Churn probability vs. recency <span className="text-xs font-normal text-slate-500">x = days since last trade · y = predicted churn probability</span></div>
+          <div className="h-72"><ResponsiveContainer width="100%" height="100%">
+            <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36"/>
+              <XAxis type="number" dataKey="daysSinceLast" stroke="#566673" fontSize={10} name="daysSinceLast"/>
+              <YAxis type="number" dataKey="churnProb" domain={[0, 1]} stroke="#566673" fontSize={10} name="churnProb"/>
+              <Tooltip content={<ChurnTT/>}/>
+              <Scatter data={watchlist} isAnimationActive={false}>
+                {watchlist.map((r, i) => <Cell key={i} fill={r.earlyWarning ? "#f59e0b" : "#64748b"} fillOpacity={r.earlyWarning ? 0.9 : 0.35}/>)}
+              </Scatter>
+            </ScatterChart>
+          </ResponsiveContainer></div>
+        </section>
+      </div>
+
+      <section className="panel overflow-hidden">
+        <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
+          <span className="font-semibold">Watchlist <span className="text-xs font-normal text-slate-500">sorted: early warnings first, then by churnProb</span></span>
+          <span className="text-[11px] text-slate-500">{fmtCount(filtered.length)} of {fmtCount(watchlist.length)}</span>
+        </div>
+        <div className="max-h-[28rem] overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-slate-950/95 text-slate-500">
+              <tr>
+                <th className="px-4 py-1.5 text-left font-medium">signal</th>
+                <th className="px-3 py-1.5 text-right font-medium">churnProb</th>
+                <th className="px-3 py-1.5 text-right font-medium">days since last</th>
+                <th className="px-3 py-1.5 text-right font-medium">trades ({lookback}d)</th>
+                <th className="px-3 py-1.5 text-center font-medium">warning</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/60">
+              {filtered.slice(0, 300).map(r => <tr key={r.signalId} className={r.earlyWarning ? "bg-amber-950/10" : ""}>
+                <td className="px-4 py-1.5 tabular-nums text-slate-300">{r.signalId}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums font-semibold text-cyan-300">{(r.churnProb * 100).toFixed(1)}%</td>
+                <td className="px-3 py-1.5 text-right tabular-nums text-slate-400">{bkNum(r.daysSinceLast, 1)}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums text-slate-400">{fmtCount(r.nTrades)}</td>
+                <td className="px-3 py-1.5 text-center">{r.earlyWarning && <span className="text-amber-400">⚠</span>}</td>
+              </tr>)}
+              {!filtered.length && <tr><td colSpan={5} className="px-4 py-8 text-center text-slate-600">no providers match</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading attrition scores…</div>}
+  </div>;
+}
+
+// ---- Adaptive Toxicity Classifier (VFDT / Hoeffding Tree) --------------
+// Predicted Risk Score's counterpart: same cold-start feature pipeline and
+// task (.brk.vfdt.* mirrors .brk.ml.*), but the model is a Hoeffding Tree
+// trained INCREMENTALLY - one account at a time, in true chronological
+// order - and validated prequentially (predict-then-learn, never a shuffled
+// k-fold). The point of a second page isn't "which model wins" - it's
+// showing what an incremental, never-retrained classifier actually looks
+// like next to a batch one: a real tree with visible splits, and a learning
+// curve instead of a fold-averaged AUC.
+function AdaptiveToxicityClassifier() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookback, setLookback] = useState(30);
+  const [onlyWarn, setOnlyWarn] = useState(false);
+  const [q, setQ] = useState("");
+
+  const load = useCallback((lb) => {
+    fetch(new URL(`/api/brokertech/vfdt?lookbackDays=${lb}`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(lookback); }, [load, lookback]);
+  useEffect(() => { if (!auto) return; const id = setInterval(() => load(lookback), 60000); return () => clearInterval(id); }, [auto, load, lookback]);
+
+  const m = data?.meta || {};
+  const v = data?.validation || {};
+  const tree = data?.tree || {};
+  const curve = data?.curve || [];
+  const watchlist = data?.watchlist || [];
+  const importance = data?.importance || [];
+  const maxSplits = Math.max(...importance.map(f => f.nSplits), 1);
+
+  const filtered = useMemo(() => {
+    let out = watchlist;
+    if (onlyWarn) out = out.filter(r => r.earlyWarning);
+    const needle = q.trim();
+    if (needle) out = out.filter(r => String(r.signalId).includes(needle));
+    return out;
+  }, [watchlist, onlyWarn, q]);
+
+  const nWarn = watchlist.filter(r => r.earlyWarning).length;
+
+  const VfdtTT = ({ active, payload }) => {
+    if (!active || !payload?.length) return null;
+    const r = payload[0].payload;
+    return <div style={TT} className="p-2">
+      <div className="font-semibold text-slate-200">signal {r.signalId}</div>
+      <div style={{ color: RISK_BUCKET_COLOR[r.bucket] }}>rule: {r.bucket} ({bkNum(r.toxScore, 3)})</div>
+      <div className="text-cyan-300">tree leaf: {(r.vfdtProb * 100).toFixed(1)}%</div>
+      {r.earlyWarning && <div className="text-amber-400">ahead of the rule</div>}
+    </div>;
+  };
+
+  const CurveTT = ({ active, payload }) => {
+    if (!active || !payload?.length) return null;
+    const r = payload[0].payload;
+    return <div style={TT} className="p-2">
+      <div className="font-semibold text-slate-200">{fmtCount(r.n)} accounts seen</div>
+      <div className="text-emerald-300">running accuracy: {(r.acc * 100).toFixed(1)}%</div>
+      {r.auc != null && <div className="text-cyan-300">running AUC: {bkNum(r.auc, 3)}</div>}
+    </div>;
+  };
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">Adaptive Toxicity Classifier · <span className="text-slate-500">.brk.vfdt.* Hoeffding Tree · scores every active provider from ~{lookback}d of recent behaviour</span></span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[30, 60, 90, 180].map(d => <button key={d} onClick={() => setLookback(d)}
+          className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={onlyWarn} onChange={e => setOnlyWarn(e.target.checked)}/> early warnings only</label>
+      <input value={q} onChange={e => setQ(e.target.value)} placeholder="signalId…"
+        className="w-28 rounded border border-slate-800 bg-slate-950/60 px-1.5 py-1 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-cyan-700"/>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(lookback)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {m.sDate && <span className="tabular-nums">{m.sDate} → {m.eDate}</span>}
+        {data && <span className="text-slate-500">{fmtCount(m.nScored)} providers scored</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">updated {updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/brokertech/vfdt — {err}
+      <div className="mt-1 text-rose-400/70">needs retailR_hdb (or brokerTech_hdb) with modules/analytics/brokerTech/brokerTech.q in its hdb.json libraries, and OPENQ_BROKERTECH_HDB set.</div></div>}
+
+    {data && <>
+      <div className="rounded border border-violet-900/60 bg-violet-950/20 px-3 py-2 text-[11px] text-violet-300/80">
+        A VFDT (Hoeffding Tree) trained on the same cold-start task as Predicted Risk Score - {fmtCount(v.nAccounts)} historical accounts, first 30 days of trading predicting eventual MEDIUM+ risk over the next 150 days - but fit INCREMENTALLY, one account at a time in true chronological order, with no batch retrain. Scored PREQUENTIALLY (predict, then learn - never a shuffled fold, since a live stream never gets to peek ahead): {(v.prequentialAccuracy * 100).toFixed(1)}% running accuracy, {bkNum(v.prequentialAuc, 2)} running AUC, precision in its own top decile {bkNum(v.precisionAtDecile * 100, 1)}% against a {bkNum(v.baseRate * 100, 1)}% base rate - a {bkNum(v.lift, 1)}x lift. That AUC is honestly below Predicted Risk Score's batch logistic regression (0.75) - a greedy tree finds one threshold at a time from a live stream and never revisits it, while the LR combines all 16 globally-standardized features' smooth contributions at once. The label is skewed (~{bkNum(v.baseRate * 100, 1)}% positive), so this tree uses Hellinger-distance splitting rather than the usual info-gain criterion, which alone was the difference between a tree that never split and one that actually learns - see openq-notebook/train_vfdt_classifier.py.
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label="Providers scored" value={fmtCount(watchlist.length)} icon={GitBranch} sub={`${lookback}d window`}/>
+        <StatTile label="Early warnings" value={fmtCount(nWarn)} icon={Radar} tone={nWarn ? "warn" : "mute"}
+          sub="tree flags it, rule still says LOW"/>
+        <StatTile label="Prequential AUC" value={bkNum(v.prequentialAuc, 2)} icon={Brain} sub={`${fmtCount(v.nAccounts)} accounts, one pass`}/>
+        <StatTile label="Precision @ decile" value={`${bkNum(v.precisionAtDecile * 100, 1)}%`} icon={TrendingUp} tone="pos"
+          sub={`vs ${bkNum(v.baseRate * 100, 1)}% base rate · ${bkNum(v.lift, 1)}x lift`}/>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-[1fr_1.3fr]">
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Split usage <span className="text-xs font-normal text-slate-500">how many times each feature was chosen as a tree split</span></div>
+          <div className="space-y-1">
+            {importance.map(f => <div key={f.feature} className="flex items-center gap-2 text-xs">
+              <span className="w-28 shrink-0 truncate text-slate-400">{f.feature}</span>
+              <div className="h-3 flex-1 overflow-hidden rounded bg-slate-800">
+                <div className="h-full rounded bg-violet-500" style={{ width: `${100 * f.nSplits / maxSplits}%` }}/>
+              </div>
+              <span className="w-6 shrink-0 text-right tabular-nums text-slate-500">{f.nSplits}</span>
+            </div>)}
+            {!importance.length && <div className="text-xs text-slate-600">no splits yet</div>}
+          </div>
+          <div className="mt-3 grid grid-cols-4 gap-2 border-t border-slate-800 pt-3 text-center">
+            <div><div className="text-sm font-semibold text-slate-200">{fmtCount(tree.depth)}</div><div className="text-[10px] text-slate-500">depth</div></div>
+            <div><div className="text-sm font-semibold text-slate-200">{fmtCount(tree.nNodes)}</div><div className="text-[10px] text-slate-500">nodes</div></div>
+            <div><div className="text-sm font-semibold text-slate-200">{fmtCount(tree.nBranches)}</div><div className="text-[10px] text-slate-500">branches</div></div>
+            <div><div className="text-sm font-semibold text-slate-200">{fmtCount(tree.nLeaves)}</div><div className="text-[10px] text-slate-500">leaves</div></div>
+          </div>
+        </section>
+
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Learning curve <span className="text-xs font-normal text-slate-500">prequential accuracy/AUC vs. how many accounts the tree has seen so far</span></div>
+          <div className="h-72"><ResponsiveContainer width="100%" height="100%">
+            <LineChart data={curve} margin={{ top: 8, right: 16, bottom: 4, left: 0 }}>
+              <CartesianGrid stroke="#1e2b36"/>
+              <XAxis dataKey="n" stroke="#566673" fontSize={10} tickFormatter={fmtCount}/>
+              <YAxis domain={[0, 1]} stroke="#566673" fontSize={10}/>
+              <ReferenceLine y={0.5} stroke="#37505f" strokeDasharray="4 3"/>
+              <Tooltip content={<CurveTT/>}/>
+              <Line type="monotone" dataKey="acc" stroke="#34d399" strokeWidth={1.5} dot={false} name="accuracy" isAnimationActive={false}/>
+              <Line type="monotone" dataKey="auc" stroke="#22d3ee" strokeWidth={1.5} dot={false} name="AUC" isAnimationActive={false} connectNulls/>
+            </LineChart>
+          </ResponsiveContainer></div>
+          <div className="mt-1 flex items-center gap-3 text-[11px] text-slate-500">
+            <span className="inline-flex items-center gap-1"><span className="h-2 w-3 rounded-sm bg-emerald-400"/>running accuracy</span>
+            <span className="inline-flex items-center gap-1"><span className="h-2 w-3 rounded-sm bg-cyan-400"/>running AUC</span>
+            <span className="inline-flex items-center gap-1"><span className="h-2 w-3 border-t border-dashed border-slate-600"/>coin-flip AUC</span>
+          </div>
+        </section>
+      </div>
+
+      <section className="panel p-4">
+        <div className="mb-2 font-semibold">Tree vs. rule, side by side <span className="text-xs font-normal text-slate-500">x = current toxScore (rule) · y = current vfdtProb (tree leaf) · above the diagonal = tree already sees more risk than the rule does today</span></div>
+        <div className="h-64"><ResponsiveContainer width="100%" height="100%">
+          <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 8 }}>
+            <CartesianGrid stroke="#1e2b36"/>
+            <XAxis type="number" dataKey="toxScore" domain={[0, 1]} stroke="#566673" fontSize={10} name="toxScore"/>
+            <YAxis type="number" dataKey="vfdtProb" domain={[0, 1]} stroke="#566673" fontSize={10} name="vfdtProb"/>
+            <ReferenceLine segment={[{ x: 0, y: 0 }, { x: 1, y: 1 }]} stroke="#37505f" strokeDasharray="4 3"/>
+            <Tooltip content={<VfdtTT/>}/>
+            <Scatter data={watchlist} isAnimationActive={false}>
+              {watchlist.map((r, i) => <Cell key={i} fill={RISK_BUCKET_COLOR[r.bucket] || "#64748b"} fillOpacity={r.earlyWarning ? 0.95 : 0.3}/>)}
+            </Scatter>
+          </ScatterChart>
+        </ResponsiveContainer></div>
+      </section>
+
+      <section className="panel overflow-hidden">
+        <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
+          <span className="font-semibold">Watchlist <span className="text-xs font-normal text-slate-500">sorted: early warnings first, then by vfdtProb</span></span>
+          <span className="text-[11px] text-slate-500">{fmtCount(filtered.length)} of {fmtCount(watchlist.length)}</span>
+        </div>
+        <div className="max-h-[28rem] overflow-y-auto">
+          <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-slate-950/95 text-slate-500">
+              <tr>
+                <th className="px-4 py-1.5 text-left font-medium">signal</th>
+                <th className="px-3 py-1.5 text-right font-medium">vfdtProb</th>
+                <th className="px-3 py-1.5 text-right font-medium">toxScore</th>
+                <th className="px-3 py-1.5 text-left font-medium">bucket</th>
+                <th className="px-3 py-1.5 text-right font-medium">ahead of rule</th>
+                <th className="px-3 py-1.5 text-center font-medium">warning</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/60">
+              {filtered.slice(0, 300).map(r => <tr key={r.signalId} className={r.earlyWarning ? "bg-amber-950/10" : ""}>
+                <td className="px-4 py-1.5 tabular-nums text-slate-300">{r.signalId}</td>
+                <td className="px-3 py-1.5 text-right tabular-nums font-semibold text-violet-300">{(r.vfdtProb * 100).toFixed(1)}%</td>
+                <td className="px-3 py-1.5 text-right tabular-nums text-slate-400">{bkNum(r.toxScore, 3)}</td>
+                <td className="px-3 py-1.5"><span className="rounded px-1.5 py-0.5 text-[10px] font-semibold" style={{ background: `${RISK_BUCKET_COLOR[r.bucket]}22`, color: RISK_BUCKET_COLOR[r.bucket] }}>{r.bucket}</span></td>
+                <td className={`px-3 py-1.5 text-right tabular-nums ${riskGapTone(r.aheadOfRule)}`}>{r.aheadOfRule >= 0 ? "+" : ""}{bkNum(r.aheadOfRule, 2)}</td>
+                <td className="px-3 py-1.5 text-center">{r.earlyWarning && <span className="text-amber-400">⚠</span>}</td>
+              </tr>)}
+              {!filtered.length && <tr><td colSpan={6} className="px-4 py-8 text-center text-slate-600">no providers match</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading tree scores…</div>}
+  </div>;
+}
+
 // ---- Execution Quality (order behaviour deep-dive) --------------------
 // Same shared /api/brokertech feed, built around .brk.exec.* - order mix
 // (market/pending/limit/stop) and stop-slippage, both written in
@@ -6808,9 +8579,11 @@ function ClientClusters() {
 function ExecutionQuality() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
-  const [auto, setAuto] = useState(true);
+  // see BrokerTech's note - same shared .brk.api.suite recompute, default
+  // to on-demand rather than a 20s background poll.
+  const [auto, setAuto] = useState(false);
   const [updated, setUpdated] = useState(null);
-  const [lookback, setLookback] = useState(90);
+  const [lookback, setLookback] = useState(30);
   const [q, setQ] = useState("");
 
   const load = useCallback((lb) => {
@@ -6999,6 +8772,545 @@ function ExecutionQuality() {
       </section>
     </>}
     {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading execution-quality analytics…</div>}
+  </div>;
+}
+
+// ---- Volume (trading volume by broker + symbol breakdown) --------------
+// /api/brokertech/volume - .brk.broker.pnl (volume roster, always
+// unfiltered so the broker picker never empties) + .brk.expo.bySymbol
+// (the bar chart, scoped to whichever broker is selected). "All Brokers"
+// (empty filter) is the default, matching Book Margin/CCY's own
+// "the picker never empties out" convention.
+function Volume() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookback, setLookback] = useState(30);
+  const [broker, setBroker] = useState(""); // "" = All Brokers
+
+  const load = useCallback((lb, br) => {
+    const qs = new URLSearchParams({ lookbackDays: lb });
+    if (br) qs.set("broker", br);
+    fetch(new URL(`/api/brokertech/volume?${qs}`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(lookback, broker); }, [load, lookback, broker]);
+  useEffect(() => { if (!auto) return; const id = setInterval(() => load(lookback, broker), 30000); return () => clearInterval(id); }, [auto, load, lookback, broker]);
+
+  const m = data?.meta || {};
+  const brokers = data?.brokers || [];
+  const bySymbol = data?.bySymbol || [];
+
+  const selectedBroker = useMemo(() =>
+    broker ? brokers.find(b => b.brokerTag === broker) : null,
+    [brokers, broker]);
+
+  const totals = useMemo(() => {
+    if (selectedBroker) return { totalLots: selectedBroker.totalLots, nTrades: selectedBroker.nTrades, nProviders: selectedBroker.nProviders };
+    return brokers.reduce((a, b) => ({
+      totalLots: a.totalLots + (b.totalLots || 0),
+      nTrades: a.nTrades + (b.nTrades || 0),
+      nProviders: a.nProviders + (b.nProviders || 0),
+    }), { totalLots: 0, nTrades: 0, nProviders: 0 });
+  }, [brokers, selectedBroker]);
+
+  const chartData = useMemo(() => bySymbol.slice(0, 15).map(r => ({
+    symbol: r.symbol,
+    totalLots: r.totalLots,
+    nTrades: r.nTrades,
+    bookSharePct: r.bookSharePct,
+  })), [bySymbol]);
+
+  const brokerTotalMax = Math.max(...brokers.map(b => b.totalLots), 1e-9);
+
+  const SymbolTT = ({ active, payload }) => {
+    if (!active || !payload?.length) return null;
+    const r = payload[0].payload;
+    return <div style={TT} className="p-2">
+      <div className="font-semibold text-slate-200">{r.symbol}</div>
+      <div className="text-cyan-300">{bkNum(r.totalLots, 0)} lots</div>
+      <div className="text-slate-400">{fmtCount(r.nTrades)} trades · {bkNum(r.bookSharePct, 1)}% of notional</div>
+    </div>;
+  };
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">Volume · <span className="text-slate-500">.brk.broker.pnl / .brk.expo.bySymbol · lots traded by broker and instrument</span></span>
+      <select value={broker} onChange={e => setBroker(e.target.value)}
+        className="rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-slate-200 focus:outline-none focus:ring-1 focus:ring-cyan-700">
+        <option value="">All Brokers</option>
+        {brokers.map(b => <option key={b.brokerTag} value={b.brokerTag}>{b.brokerTag}</option>)}
+      </select>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[30, 60, 90, 180].map(d => <button key={d} onClick={() => setLookback(d)}
+          className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(lookback, broker)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {m.sDate && <span className="tabular-nums">{m.sDate} → {m.eDate}</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/brokertech/volume — {err}
+      <div className="mt-1 text-rose-400/70">needs retailR_hdb (or brokerTech_hdb) with modules/analytics/brokerTech/brokerTech.q in its hdb.json libraries, and OPENQ_BROKERTECH_HDB set.</div></div>}
+
+    {data && <>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label="Total volume" value={`${bkNum(totals.totalLots, 0)} lots`} icon={BarChart3}
+          sub={broker ? broker : `across ${fmtCount(brokers.length)} brokers`}/>
+        <StatTile label="Trades" value={fmtCount(totals.nTrades)} icon={Activity} sub={`${lookback}d window`}/>
+        <StatTile label="Providers" value={fmtCount(totals.nProviders)} icon={Users}
+          sub={broker ? "this broker" : "all brokers"}/>
+        <StatTile label="Symbols traded" value={fmtCount(bySymbol.length)} icon={CandlestickChart}
+          sub={bySymbol[0] ? `top: ${bySymbol[0].symbol}` : "—"}/>
+      </div>
+
+      <div className="grid gap-3 lg:grid-cols-[1fr_1.6fr]">
+        <section className="panel overflow-hidden">
+          <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-4 py-2">
+            <span className="font-semibold">Volume by broker</span>
+            <span className="text-[11px] text-slate-500">{fmtCount(brokers.length)} brokers</span>
+          </div>
+          <div className="max-h-[26rem] overflow-y-auto p-3 space-y-1.5">
+            {brokers.map(b => <button key={b.brokerTag} onClick={() => setBroker(b.brokerTag === broker ? "" : b.brokerTag)}
+              className={`block w-full rounded px-2 py-1.5 text-left text-xs transition ${b.brokerTag === broker ? "bg-cyan-950/40 ring-1 ring-cyan-700" : "hover:bg-slate-900"}`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className={b.brokerTag === broker ? "text-cyan-300" : "text-slate-300"}>{b.brokerTag}</span>
+                <span className="tabular-nums text-slate-400">{bkNum(b.totalLots, 0)}</span>
+              </div>
+              <div className="mt-1 h-1.5 overflow-hidden rounded bg-slate-800">
+                <div className="h-full rounded bg-cyan-700" style={{ width: `${100 * b.totalLots / brokerTotalMax}%` }}/>
+              </div>
+              <div className="mt-0.5 text-[10px] text-slate-600">{fmtCount(b.nProviders)} providers · {fmtCount(b.nTrades)} trades</div>
+            </button>)}
+          </div>
+        </section>
+
+        <section className="panel p-4">
+          <div className="mb-2 font-semibold">Volume by symbol <span className="text-xs font-normal text-slate-500">{broker ? `${broker} · ` : "all brokers · "}top {chartData.length} of {fmtCount(bySymbol.length)}</span></div>
+          <div className="h-[26rem]"><ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData} layout="vertical" margin={{ top: 8, right: 24, bottom: 8, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36" horizontal={false}/>
+              <XAxis type="number" stroke="#566673" fontSize={10} tickFormatter={v => bkNum(v, 0)}/>
+              <YAxis type="category" dataKey="symbol" stroke="#566673" fontSize={10} width={70}/>
+              <Tooltip content={<SymbolTT/>} cursor={{ fill: "#ffffff08" }}/>
+              <Bar dataKey="totalLots" fill="#22d3ee" radius={[0, 3, 3, 0]}/>
+            </BarChart>
+          </ResponsiveContainer></div>
+        </section>
+      </div>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading volume…</div>}
+  </div>;
+}
+
+// ---- Book Margin (consolidated margin across every provider/brokerage) --
+// /api/brokertech/margin - .brk.rev.daily/.dailyByInstrument over
+// .brk.src.trade, the same window-pull every other Broker Tech page uses,
+// just grouped by date (and date+symbol) instead of a single window total.
+// "Consolidated" is the point: an individual provider trades through one
+// specific underlying brokerage (see the Broker Tech page's per-broker
+// scorecard), but this page sums every provider/brokerage together into
+// one book, same as .brk.book.brokerPnl's "if everything were
+// internalised" convention - NOT already netted against the A/B routing
+// split shown elsewhere.
+function BookMargin() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookback, setLookback] = useState(30);
+  const [pairView, setPairView] = useState("today"); // today | window
+  const [mode, setMode] = useState("routed"); // routed | raw | ideal
+
+  const load = useCallback((lb) => {
+    fetch(new URL(`/api/brokertech/margin?lookbackDays=${lb}`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(lookback); }, [load, lookback]);
+  useEffect(() => { if (!auto) return; const id = setInterval(() => load(lookback), 30000); return () => clearInterval(id); }, [auto, load, lookback]);
+
+  // raw: "if everything were internalised" (.brk.rev.daily, totalRev).
+  // routed: the ACTUAL A/B/SPLIT policy .brk.book.recommend applies
+  // (.brk.rev.dailyRouted, routedRev). ideal: the theoretical CEILING -
+  // each signal routed to whichever of A/B paid off better in hindsight,
+  // no SPLIT compromise (.brk.rev.dailyIdeal, idealRev) - not something a
+  // desk could pre-commit to, the bar the real engine is measured against.
+  // One lookup keeps the rest of the component mode-agnostic.
+  const MODE_CFG = {
+    routed: { revKey: "routedRev", todayKey: "todayRouted", dailyKey: "dailyRouted", pairTodayKey: "byPairTodayRouted", pairWindowKey: "byPairWindowRouted", revLabel: "routed rev", tabLabel: "routed (A/B/split)" },
+    raw: { revKey: "totalRev", todayKey: "today", dailyKey: "daily", pairTodayKey: "byPairToday", pairWindowKey: "byPairWindow", revLabel: "total rev", tabLabel: "raw (all-B-book)" },
+    ideal: { revKey: "idealRev", todayKey: "todayIdeal", dailyKey: "dailyIdeal", pairTodayKey: "byPairTodayIdeal", pairWindowKey: "byPairWindowIdeal", revLabel: "ideal rev", tabLabel: "ideal (perfect hindsight)" },
+  };
+  const cfg = MODE_CFG[mode];
+  const revKey = cfg.revKey;
+  const m = data?.meta || {};
+  const today = data?.[cfg.todayKey] || {};
+  const daily = data?.[cfg.dailyKey] || [];
+  const byPairToday = data?.[cfg.pairTodayKey] || [];
+  const byPairWindow = data?.[cfg.pairWindowKey] || [];
+
+  const dailyChart = useMemo(() => daily.map(r => ({
+    date: (r.date || "").slice(5, 10), // MM-DD
+    rev: r[revKey],
+    revPerLot: r.revPerLot,
+  })), [daily, revKey]);
+
+  const pairRows = pairView === "today" ? byPairToday : byPairWindow;
+  const pairChart = useMemo(() =>
+    [...pairRows].sort((a, b) => Math.abs(b[revKey] || 0) - Math.abs(a[revKey] || 0)).slice(0, 15),
+    [pairRows, revKey]);
+
+  const windowTotals = useMemo(() => byPairWindow.reduce((a, r) => ({
+    rev: a.rev + (r[revKey] || 0),
+    totalLots: a.totalLots + (r.totalLots || 0),
+    nTrades: a.nTrades + (r.nTrades || 0),
+  }), { rev: 0, totalLots: 0, nTrades: 0 }), [byPairWindow, revKey]);
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">consolidated book margin · <span className="text-slate-500">.brk.rev.daily{mode !== "raw" ? mode[0].toUpperCase() + mode.slice(1) : ""}/.dailyByInstrument · every provider + underlying brokerage summed together · acct ccy</span></span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {Object.entries(MODE_CFG).map(([key, c]) => <button key={key} onClick={() => setMode(key)}
+          className={`px-2 py-1 ${mode === key ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{c.tabLabel}</button>)}
+      </span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[30, 90, 180, 365].map(d => <button key={d} onClick={() => setLookback(d)}
+          className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(lookback)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {m.sDate && <span className="tabular-nums">{m.sDate} → {m.eDate}</span>}
+        {data && <span className="text-slate-500">{fmtCount(m.nTradeRows)} trades in window</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/brokertech/margin — {err}
+      <div className="mt-1 text-rose-400/70">needs retailR_hdb (or brokerTech_hdb) with modules/analytics/brokerTech/brokerTech.q in its hdb.json libraries, and OPENQ_BROKERTECH_HDB set.</div></div>}
+
+    {data && <>
+      {mode === "routed" && <div className="rounded border border-cyan-900/60 bg-cyan-950/20 px-3 py-2 text-[11px] text-cyan-300/80">
+        Routed margin applies each provider's actual .brk.book.recommend decision (A = hedged to an LP, commission only; B = internalised in full; SPLIT = {(data?.thresholds?.splitHedgeFrac ?? 0.5) * 100}/{100 - (data?.thresholds?.splitHedgeFrac ?? 0.5) * 100} blend) - the route itself is a whole-window decision per provider, so it's the same route applied to every day that provider traded, not re-derived daily.
+      </div>}
+      {mode === "ideal" && <div className="rounded border border-violet-900/60 bg-violet-950/20 px-3 py-2 text-[11px] text-violet-300/80">
+        Ideal margin is a theoretical CEILING, not a real policy: each provider routed to whichever of A or B actually paid off better over the whole window, in perfect hindsight, with no SPLIT compromise. It's the bar the real routing engine (the "routed" tab) is measured against - a desk can't pre-commit to this, since it requires already knowing each provider's outcome.
+      </div>}
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label={`Today's margin${m.latestDate ? ` (${m.latestDate})` : ""}`} value={fmtUsd(today[revKey], { plus: true })}
+          icon={today[revKey] >= 0 ? TrendingUp : TrendingDown} tone={today[revKey] > 0 ? "pos" : "warn"}
+          sub={mode === "routed" ? "under the desk's actual A/B/SPLIT routing" : mode === "ideal" ? "theoretical ceiling - perfect-hindsight A/B" : "B-book PnL + commission + swap, whole book"}/>
+        <StatTile label="Today's rev/lot" value={today.revPerLot != null ? `$${today.revPerLot.toFixed(2)}` : "—"} icon={Scale}
+          sub={`${fmtCount(today.nTrades)} trades · ${bkNum(today.totalLots, 1)} lots today`}/>
+        <StatTile label={`Window margin (${m.lookbackDays ?? lookback}d)`} value={fmtUsd(windowTotals.rev, { plus: true })}
+          icon={windowTotals.rev >= 0 ? TrendingUp : TrendingDown} tone={windowTotals.rev > 0 ? "pos" : "warn"}
+          sub={`${fmtCount(windowTotals.nTrades)} trades · ${fmtCount(Math.round(windowTotals.totalLots))} lots`}/>
+        <StatTile label="Pairs trading today" value={fmtCount(byPairToday.length)} icon={Layers}
+          sub={byPairToday[0] ? `top: ${byPairToday[0].symbol} (${fmtUsd(byPairToday[0][revKey], { plus: true })})` : "—"}/>
+      </div>
+
+      <section className="panel p-4">
+        <div className="mb-2 font-semibold">Daily margin snapshots <span className="text-xs font-normal text-slate-500">{cfg.revLabel} per day, whole window</span></div>
+        <div className="h-64"><ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={dailyChart} margin={{ top: 4, right: 24, bottom: 4, left: 8 }}>
+            <CartesianGrid stroke="#1e2b36"/>
+            <XAxis dataKey="date" stroke="#566673" fontSize={10}/>
+            <YAxis yAxisId="rev" stroke="#566673" fontSize={10} tickFormatter={(v) => fmtUsd(v)}/>
+            <YAxis yAxisId="rpl" orientation="right" stroke="#566673" fontSize={10} tickFormatter={(v) => `$${bkNum(v, 1)}`}/>
+            <Tooltip contentStyle={TT} formatter={(v, name) => name === "rev/lot" ? [`$${bkNum(v, 2)}`, name] : [fmtUsd(v, { plus: true }), name]}/>
+            <Legend wrapperStyle={{ fontSize: 11 }}/>
+            <ReferenceLine yAxisId="rev" y={0} stroke="#37505f"/>
+            <Bar yAxisId="rev" dataKey="rev" name={cfg.revLabel} isAnimationActive={false}>
+              {dailyChart.map((r, i) => <Cell key={i} fill={(r.rev || 0) >= 0 ? "#34d399" : "#f43f5e"}/>)}
+            </Bar>
+            <Line yAxisId="rpl" type="monotone" dataKey="revPerLot" name="rev/lot" stroke="#22d3ee" dot={false} strokeWidth={1.5}/>
+          </ComposedChart>
+        </ResponsiveContainer></div>
+        <div className="mt-1 text-[10px] text-slate-600">green/red bars = {cfg.revLabel} that day (left axis) · cyan line = revenue per lot (right axis)</div>
+      </section>
+
+      <section className="panel p-4">
+        <div className="mb-2 flex items-center justify-between">
+          <div className="font-semibold">Margin by pair <span className="text-xs font-normal text-slate-500">top 15 by |{cfg.revLabel}|</span></div>
+          <span className="flex overflow-hidden rounded border border-slate-800 text-[11px]">
+            <button onClick={() => setPairView("today")} className={`px-2 py-1 ${pairView === "today" ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>today</button>
+            <button onClick={() => setPairView("window")} className={`px-2 py-1 ${pairView === "window" ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>whole window</button>
+          </span>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-2">
+          <div className="h-80"><ResponsiveContainer width="100%" height="100%">
+            <BarChart data={pairChart} layout="vertical" margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36" horizontal={false}/>
+              <XAxis type="number" stroke="#566673" fontSize={10} tickFormatter={(v) => fmtUsd(v)}/>
+              <YAxis type="category" dataKey="symbol" stroke="#566673" fontSize={10} width={72}/>
+              <Tooltip contentStyle={TT} formatter={(v) => fmtUsd(v, { plus: true })}/>
+              <ReferenceLine x={0} stroke="#37505f"/>
+              <Bar dataKey={revKey} name={cfg.revLabel} isAnimationActive={false}>
+                {pairChart.map((r, i) => <Cell key={i} fill={(r[revKey] || 0) >= 0 ? "#34d399" : "#f43f5e"}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer></div>
+
+          <div className="max-h-80 overflow-auto">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-slate-950 text-slate-500">
+                <tr className="text-left"><th className="px-2 py-1">symbol</th><th className="px-2 py-1 text-right">trades</th>
+                  <th className="px-2 py-1 text-right">lots</th><th className="px-2 py-1 text-right">rev/lot</th>
+                  <th className="px-2 py-1 text-right">{cfg.revLabel}</th></tr>
+              </thead>
+              <tbody>
+                {pairChart.map(r => <tr key={r.symbol} className="border-t border-slate-900">
+                  <td className="px-2 py-1 font-medium text-slate-200">{r.symbol}</td>
+                  <td className="px-2 py-1 text-right tabular-nums text-slate-400">{fmtCount(r.nTrades)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums text-slate-400">{bkNum(r.totalLots, 1)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums text-slate-400">{r.revPerLot != null ? `$${r.revPerLot.toFixed(2)}` : "—"}</td>
+                  <td className={`px-2 py-1 text-right tabular-nums font-semibold ${pnlTone(r[revKey])}`}>{fmtUsd(r[revKey], { plus: true })}</td>
+                </tr>)}
+                {!pairChart.length && <tr><td colSpan={5} className="px-3 py-8 text-center text-slate-600">no pairs traded in this view</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div className="mt-1 text-[10px] text-slate-600">green = the book earns on this pair under this mode; red = clients win it ·{" "}
+          {mode === "routed" && "routedRev = commission-only where hedged (A), full B-book PnL+fees where internalised (B), a blend for SPLIT"}
+          {mode === "ideal" && "idealRev = commission-only where hindsight says A beat B, full B-book PnL+fees otherwise - no SPLIT"}
+          {mode === "raw" && "totalRev = B-book PnL + commission + swap (a B-book leak wherever red)"}
+        </div>
+      </section>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading consolidated margin…</div>}
+  </div>;
+}
+
+// ---- Profit & Loss (book-maker's P&L, under 3 routing scenarios) -------
+// /api/brokertech/margin - same window pull Book Margin uses. Book Margin
+// shows the desk's REAL numbers (raw consolidated / actual routed / ideal
+// ceiling); this page is the scenario-planning counterpart: "what would
+// the desk have earned if EVERY signal had been forced down one policy,
+// all window long" - all A (hedge everything to an LP), all B (internalise
+// everything), or ideal A/B (perfect-hindsight per-signal choice, no
+// SPLIT). All three reuse fields the gateway already returns, no new q/
+// gateway work needed:
+//   all A     -> commissionRev off the plain `daily`/`byPairToday`/
+//                `byPairWindow` tables - hedged flow never earns the desk
+//                bBookPnl or swap, .brk.book.brokerPnl's own aBookRev
+//                convention is commission-only.
+//   all B     -> totalRev off those same tables (bBookPnl+commissionRev+
+//                swapRev) - "if everything were internalised", the
+//                consolidated-book convention used throughout brokerTech.q.
+//   ideal A/B -> idealRev off `dailyIdeal`/`byPairTodayIdeal`/
+//                `byPairWindowIdeal` (.brk.rev.dailyIdeal) - per-signal
+//                max(A,B) in hindsight, the same oracle ceiling Book
+//                Margin's "ideal" tab shows.
+// revPerLot is recomputed client-side (rev/totalLots) rather than reusing
+// the gateway's precomputed revPerLot field, since that field is only
+// valid for the table's own default rev convention (totalRev for the raw
+// table, idealRev for the ideal table) - "all A" needs its own lot-normalised
+// figure off commissionRev instead.
+function ProfitLoss() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [auto, setAuto] = useState(true);
+  const [updated, setUpdated] = useState(null);
+  const [lookback, setLookback] = useState(30);
+  const [pairView, setPairView] = useState("today"); // today | window
+  const [scenario, setScenario] = useState("allB"); // allA | allB | ideal
+  const [broker, setBroker] = useState(""); // "" = all brokers (default)
+
+  const load = useCallback((lb, bk) => {
+    const sp = new URLSearchParams({ lookbackDays: lb });
+    if (bk) sp.set("broker", bk);
+    fetch(new URL(`/api/brokertech/margin?${sp.toString()}`, GW), { cache: "no-store" })
+      .then(r => r.json().then(j => { if (!r.ok) throw new Error(j.error || r.statusText); return j; }))
+      .then(j => { setData(j); setErr(null); setUpdated(new Date()); })
+      .catch(e => setErr(e.message));
+  }, []);
+  useEffect(() => { load(lookback, broker); }, [load, lookback, broker]);
+  useEffect(() => { if (!auto) return; const id = setInterval(() => load(lookback, broker), 30000); return () => clearInterval(id); }, [auto, load, lookback, broker]);
+
+  // the broker roster is always computed off the UNFILTERED window (see
+  // MARGIN_QUERY), so it never shrinks just because a filter is applied -
+  // keep the last non-empty list around too, so the dropdown doesn't
+  // flicker empty during the brief reload after picking a broker.
+  const lastBrokers = useRef([]);
+  if (data?.brokers?.length) lastBrokers.current = data.brokers;
+  const brokerOptions = data?.brokers?.length ? data.brokers : lastBrokers.current;
+
+  const SCENARIO_CFG = {
+    allA: { revKey: "commissionRev", dailyKey: "daily", pairTodayKey: "byPairToday", pairWindowKey: "byPairWindow", revLabel: "all-A P&L", tabLabel: "all A (hedge everything)" },
+    allB: { revKey: "totalRev", dailyKey: "daily", pairTodayKey: "byPairToday", pairWindowKey: "byPairWindow", revLabel: "all-B P&L", tabLabel: "all B (internalise everything)" },
+    ideal: { revKey: "idealRev", dailyKey: "dailyIdeal", pairTodayKey: "byPairTodayIdeal", pairWindowKey: "byPairWindowIdeal", revLabel: "ideal A/B P&L", tabLabel: "ideal A/B (perfect hindsight)" },
+  };
+  const cfg = SCENARIO_CFG[scenario];
+  const revKey = cfg.revKey;
+
+  const m = data?.meta || {};
+  const today = data?.[cfg.dailyKey === "dailyIdeal" ? "todayIdeal" : "today"] || {};
+  const daily = data?.[cfg.dailyKey] || [];
+  const byPairToday = data?.[cfg.pairTodayKey] || [];
+  const byPairWindow = data?.[cfg.pairWindowKey] || [];
+
+  // running sum of the scenario's own rev -> a cumulative P&L curve, so
+  // the same page also answers "is this policy compounding gains or
+  // losses over the window", not just per-day snapshots.
+  const dailyChart = useMemo(() => {
+    let cum = 0;
+    return daily.map(r => {
+      const rev = r[revKey] || 0;
+      cum += rev;
+      const revPerLot = r.totalLots > 0 ? rev / r.totalLots : null;
+      return { date: (r.date || "").slice(5, 10), pnl: rev, cum, revPerLot };
+    });
+  }, [daily, revKey]);
+
+  const winDays = daily.filter(r => (r[revKey] || 0) > 0).length;
+  const lossDays = daily.filter(r => (r[revKey] || 0) < 0).length;
+  const bestDay = daily.length ? daily.reduce((a, r) => (r[revKey] || 0) > (a[revKey] || 0) ? r : a) : null;
+  const worstDay = daily.length ? daily.reduce((a, r) => (r[revKey] || 0) < (a[revKey] || 0) ? r : a) : null;
+
+  const pairRows = pairView === "today" ? byPairToday : byPairWindow;
+  const pairChart = useMemo(() =>
+    [...pairRows].sort((a, b) => Math.abs(b[revKey] || 0) - Math.abs(a[revKey] || 0)).slice(0, 15),
+    [pairRows, revKey]);
+
+  const windowTotals = useMemo(() => byPairWindow.reduce((a, r) => ({
+    rev: a.rev + (r[revKey] || 0),
+    totalLots: a.totalLots + (r.totalLots || 0),
+    nTrades: a.nTrades + (r.nTrades || 0),
+  }), { rev: 0, totalLots: 0, nTrades: 0 }), [byPairWindow, revKey]);
+
+  return <div className="space-y-4">
+    <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
+      <span className="text-slate-400">book-maker profit &amp; loss · <span className="text-slate-500">scenario planning - what the desk earns under a forced routing policy{broker ? `, ${broker} only` : ", every provider + underlying brokerage summed together"}</span></span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {Object.entries(SCENARIO_CFG).map(([key, c]) => <button key={key} onClick={() => setScenario(key)}
+          className={`px-2 py-1 ${scenario === key ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{c.tabLabel}</button>)}
+      </span>
+      <span className="flex overflow-hidden rounded border border-slate-800">
+        {[30, 90, 180, 365].map(d => <button key={d} onClick={() => setLookback(d)}
+          className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
+      </span>
+      <select value={broker} onChange={e => setBroker(e.target.value)}
+        className="rounded border border-slate-700 bg-slate-950 px-1.5 py-1 text-slate-200">
+        <option value="">all brokers</option>
+        {brokerOptions.map(b => <option key={b.brokerTag} value={b.brokerTag}>{b.brokerTag} ({fmtCount(b.nTrades)})</option>)}
+      </select>
+      <label className="flex items-center gap-1.5 text-slate-400"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)}/> auto</label>
+      <button onClick={() => load(lookback, broker)} className="flex items-center gap-1 rounded border border-slate-800 px-2 py-1 text-slate-300 hover:bg-slate-900"><RefreshCw size={12}/> refresh</button>
+      <span className="ml-auto flex items-center gap-2 text-slate-600">
+        {m.sDate && <span className="tabular-nums">{m.sDate} → {m.eDate}</span>}
+        {data && <span className="text-slate-500">{fmtCount(m.nTradeRows)} trades in window{m.broker ? ` · ${m.broker}` : ""}</span>}
+        {data && <span className="text-slate-600">{data.computedMs}ms</span>}
+        {auto && <span className="flex items-center gap-1.5 text-emerald-400"><span className="h-1.5 w-1.5 animate-ping rounded-full bg-emerald-400"/> live</span>}
+        {updated && <span className="tabular-nums">{updated.toLocaleTimeString()}</span>}
+      </span>
+    </section>
+
+    {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/brokertech/margin — {err}
+      <div className="mt-1 text-rose-400/70">needs retailR_hdb (or brokerTech_hdb) with modules/analytics/brokerTech/brokerTech.q in its hdb.json libraries, and OPENQ_BROKERTECH_HDB set.</div></div>}
+
+    {data && <>
+      <div className="rounded border border-slate-800 bg-slate-900/40 px-3 py-2 text-[11px] text-slate-400">
+        This is the desk's own P&amp;L under a hypothetical forced policy, not the clients' trading result. {scenario === "allA" && "All A: every signal hedged to an LP for the whole window - the desk earns commission only, never carries client market risk (no bBookPnl, no swap)."}
+        {scenario === "allB" && "All B: every signal fully internalised for the whole window - the desk's P&L is the mirror of client P&L (bBookPnl) plus commission and swap - see Book Margin's \"raw\" tab for the same figure."}
+        {scenario === "ideal" && "Ideal A/B: each signal routed to WHICHEVER of A or B actually paid off better over the whole window, in perfect hindsight, no SPLIT compromise - a theoretical ceiling, not a policy a desk could pre-commit to (see Book Margin's \"ideal\" tab)."}
+      </div>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <StatTile label={`Today's ${cfg.revLabel}${m.latestDate ? ` (${m.latestDate})` : ""}`} value={fmtUsd(today[revKey], { plus: true })}
+          icon={today[revKey] >= 0 ? TrendingUp : TrendingDown} tone={today[revKey] > 0 ? "pos" : "warn"}
+          sub={`${fmtCount(today.nTrades)} trades · ${bkNum(today.totalLots, 1)} lots today`}/>
+        <StatTile label={`Window ${cfg.revLabel} (${m.lookbackDays ?? lookback}d)`} value={fmtUsd(windowTotals.rev, { plus: true })}
+          icon={windowTotals.rev >= 0 ? TrendingUp : TrendingDown} tone={windowTotals.rev > 0 ? "pos" : "warn"}
+          sub={`${fmtCount(windowTotals.nTrades)} trades · cumulative over window`}/>
+        <StatTile label="Win days / loss days" value={`${winDays} / ${lossDays}`} icon={Layers}
+          sub={daily.length ? `${((100 * winDays) / daily.length).toFixed(0)}% of ${daily.length} days desk-positive` : "—"}/>
+        <StatTile label="Best / worst day" value={bestDay ? fmtUsd(bestDay[revKey], { plus: true }) : "—"}
+          icon={CircleDollarSign} tone="pos"
+          sub={worstDay ? `worst: ${fmtUsd(worstDay[revKey], { plus: true })} on ${worstDay.date}` : "—"}/>
+      </div>
+
+      <section className="panel p-4">
+        <div className="mb-2 font-semibold">Daily {cfg.revLabel} <span className="text-xs font-normal text-slate-500">bars = that day's P&amp;L, line = cumulative over the window</span></div>
+        <div className="h-64"><ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={dailyChart} margin={{ top: 4, right: 24, bottom: 4, left: 8 }}>
+            <CartesianGrid stroke="#1e2b36"/>
+            <XAxis dataKey="date" stroke="#566673" fontSize={10}/>
+            <YAxis yAxisId="pnl" stroke="#566673" fontSize={10} tickFormatter={(v) => fmtUsd(v)}/>
+            <YAxis yAxisId="cum" orientation="right" stroke="#566673" fontSize={10} tickFormatter={(v) => fmtUsd(v)}/>
+            <Tooltip contentStyle={TT} formatter={(v, name) => [fmtUsd(v, { plus: true }), name]}/>
+            <Legend wrapperStyle={{ fontSize: 11 }}/>
+            <ReferenceLine yAxisId="pnl" y={0} stroke="#37505f"/>
+            <Bar yAxisId="pnl" dataKey="pnl" name={cfg.revLabel} isAnimationActive={false}>
+              {dailyChart.map((r, i) => <Cell key={i} fill={(r.pnl || 0) >= 0 ? "#34d399" : "#f43f5e"}/>)}
+            </Bar>
+            <Line yAxisId="cum" type="monotone" dataKey="cum" name={`cumulative ${cfg.revLabel}`} stroke="#22d3ee" dot={false} strokeWidth={1.5}/>
+          </ComposedChart>
+        </ResponsiveContainer></div>
+        <div className="mt-1 text-[10px] text-slate-600">green bars = desk profit that day · red bars = desk loss that day · cyan line = cumulative {cfg.revLabel} (right axis)</div>
+      </section>
+
+      <section className="panel p-4">
+        <div className="mb-2 flex items-center justify-between">
+          <div className="font-semibold">{cfg.revLabel} by pair <span className="text-xs font-normal text-slate-500">top 15 by |{cfg.revLabel}|</span></div>
+          <span className="flex overflow-hidden rounded border border-slate-800 text-[11px]">
+            <button onClick={() => setPairView("today")} className={`px-2 py-1 ${pairView === "today" ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>today</button>
+            <button onClick={() => setPairView("window")} className={`px-2 py-1 ${pairView === "window" ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>whole window</button>
+          </span>
+        </div>
+        <div className="grid gap-3 lg:grid-cols-2">
+          <div className="h-80"><ResponsiveContainer width="100%" height="100%">
+            <BarChart data={pairChart} layout="vertical" margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
+              <CartesianGrid stroke="#1e2b36" horizontal={false}/>
+              <XAxis type="number" stroke="#566673" fontSize={10} tickFormatter={(v) => fmtUsd(v)}/>
+              <YAxis type="category" dataKey="symbol" stroke="#566673" fontSize={10} width={72}/>
+              <Tooltip contentStyle={TT} formatter={(v) => fmtUsd(v, { plus: true })}/>
+              <ReferenceLine x={0} stroke="#37505f"/>
+              <Bar dataKey={revKey} name={cfg.revLabel} isAnimationActive={false}>
+                {pairChart.map((r, i) => <Cell key={i} fill={(r[revKey] || 0) >= 0 ? "#34d399" : "#f43f5e"}/>)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer></div>
+
+          <div className="max-h-80 overflow-auto">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-slate-950 text-slate-500">
+                <tr className="text-left"><th className="px-2 py-1">symbol</th><th className="px-2 py-1 text-right">trades</th>
+                  <th className="px-2 py-1 text-right">lots</th><th className="px-2 py-1 text-right">rev/lot</th>
+                  <th className="px-2 py-1 text-right">{cfg.revLabel}</th></tr>
+              </thead>
+              <tbody>
+                {pairChart.map(r => <tr key={r.symbol} className="border-t border-slate-900">
+                  <td className="px-2 py-1 font-medium text-slate-200">{r.symbol}</td>
+                  <td className="px-2 py-1 text-right tabular-nums text-slate-400">{fmtCount(r.nTrades)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums text-slate-400">{bkNum(r.totalLots, 1)}</td>
+                  <td className="px-2 py-1 text-right tabular-nums text-slate-400">{r.totalLots > 0 ? `$${(r[revKey] / r.totalLots).toFixed(2)}` : "—"}</td>
+                  <td className={`px-2 py-1 text-right tabular-nums font-semibold ${pnlTone(r[revKey])}`}>{fmtUsd(r[revKey], { plus: true })}</td>
+                </tr>)}
+                {!pairChart.length && <tr><td colSpan={5} className="px-3 py-8 text-center text-slate-600">no pairs traded in this view</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div className="mt-1 text-[10px] text-slate-600">green = the desk earns on this pair under this scenario; red = the desk loses it ·{" "}
+          {scenario === "allA" && "commissionRev only - hedged flow never exposes the desk to client market P&L or swap"}
+          {scenario === "allB" && "bBookPnl + commission + swap, whole book internalised"}
+          {scenario === "ideal" && "commission-only where hindsight says A beat B, full B-book P&L+fees otherwise - no SPLIT"}
+        </div>
+      </section>
+    </>}
+    {!data && !err && <div className="panel p-8 text-center text-sm text-slate-500">loading book-maker profit &amp; loss…</div>}
   </div>;
 }
 
@@ -7301,6 +9613,29 @@ function EconomicCalendar() {
   </div>;
 }
 
+// No error boundary existed anywhere in this SPA: an uncaught render
+// exception on ANY page unmounts the entire React tree, so a bug in one
+// page (or a `key` collision from bad data) shows up as the WHOLE
+// dashboard going blank - nav bar included - with no on-screen clue why.
+// Wraps just the routed page content below so Nav/Header survive a crash
+// and the actual error (message + component stack) is visible instead of
+// a silent white screen.
+class PageErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error("Page crashed:", error, info?.componentStack); }
+  render() {
+    if (this.state.error) {
+      return <div className="panel m-4 border-rose-900 bg-rose-950/40 p-4 text-sm text-rose-300">
+        <div className="font-semibold">This page crashed while rendering.</div>
+        <div className="mt-2 whitespace-pre-wrap font-mono text-xs text-rose-400">{String(this.state.error?.message || this.state.error)}</div>
+        <button onClick={() => this.setState({ error: null })} className="mt-3 rounded border border-rose-800 px-2 py-1 text-xs hover:bg-rose-900/40">try again</button>
+      </div>;
+    }
+    return this.props.children;
+  }
+}
+
 function App() {
   const [active,setActive] = useState("Overview");
   const [orders,setOrders] = useState(baseOrders);
@@ -7324,7 +9659,6 @@ function App() {
     if(active==="Candles") return <CandlesEq/>;
     if(active==="Market Impact") return <Impact/>;
     if(active==="Markout") return <Markout/>;
-    if(active==="Backtest") return <Backtest/>;
     if(active==="Economic Calendar") return <EconomicCalendar/>;
     if(active==="Spreads") return <Spreads/>;
     if(active==="Prime Finance") return <PrimeFinance/>;
@@ -7337,13 +9671,25 @@ function App() {
     if(active==="A/B Book") return <ABBook/>;
     if(active==="Toxic Analysis") return <ToxicAnalysis/>;
     if(active==="Client Clusters") return <ClientClusters/>;
+    if(active==="Trader Segments") return <TraderSegments/>;
+    if(active==="Trader Tools") return <TraderTools/>;
+    if(active==="CCY") return <CCY/>;
+    if(active==="SSI") return <SSI/>;
+    if(active==="Predicted Risk Score") return <PredictedRiskScore/>;
+    if(active==="Predicted Profitability Score") return <PredictedProfitabilityScore/>;
+    if(active==="Predicted Time of Trading") return <PredictedTimeOfTrading/>;
+    if(active==="Predicted Client Attrition") return <PredictedClientAttrition/>;
+    if(active==="Adaptive Toxicity Classifier") return <AdaptiveToxicityClassifier/>;
     if(active==="Execution Quality") return <ExecutionQuality/>;
+    if(active==="Book Margin") return <BookMargin/>;
+    if(active==="Volume") return <Volume/>;
+    if(active==="Profit & Loss") return <ProfitLoss/>;
     if(active==="Process Mon") return <ProcMon/>;
     if(active==="Resources") return <Processes/>;
     if(active==="Logs") return <Logs/>;
     if(active==="JobStatus") return <JobStatus/>;
     return <Overview orders={orders}/>;
   },[active,orders]);
-  return <div className="flex min-h-screen"><Nav active={active} setActive={setActive}/><main className="min-w-0 flex-1"><Header active={active}/><div className="p-4 md:p-6">{page}</div></main></div>
+  return <div className="flex min-h-screen"><Nav active={active} setActive={setActive}/><main className="min-w-0 flex-1"><Header active={active}/><div className="p-4 md:p-6"><PageErrorBoundary key={active}>{page}</PageErrorBoundary></div></main></div>
 }
 createRoot(document.getElementById("root")).render(<App/>);

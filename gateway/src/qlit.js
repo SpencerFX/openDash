@@ -19,6 +19,13 @@ class BadInput extends Error {
 const SYMBOL_RE = /^[A-Za-z][A-Za-z0-9_.]*$/;
 // a `like` pattern: a symbol with q wildcards ? and * allowed
 const PATTERN_RE = /^[A-Za-z0-9_.?*]+$/;
+// Yahoo-style tickers (yfinance eq/fx feeds): digits, letters, '.', '-' -
+// e.g. 0005.HK, 7203.T, BRK-B. These can start with a digit or contain '.'/
+// '-', which q's bare `sym token syntax can't express (a leading digit or a
+// bare '-' doesn't parse as part of a symbol token at all). Cast a validated
+// string instead - `$"0005.HK"` is a valid symbol literal for any string,
+// once quotes/backslashes are excluded by the regex.
+const YAHOO_SYM_RE = /^[0-9A-Za-z.\-]{1,14}$/;
 
 function assert(cond, msg) {
   if (!cond) throw new BadInput(msg);
@@ -42,6 +49,45 @@ function stringLit(s) {
   assert(typeof s === "string" && PATTERN_RE.test(s), `invalid pattern: ${JSON.stringify(s)}`);
   return '"' + s + '"';
 }
+
+// `$"0005.HK"  (Yahoo-ticker symbol atom literal, via cast rather than a
+// bare backtick token - see YAHOO_SYM_RE above)
+function yahooSymbolLit(name) {
+  assert(typeof name === "string" && YAHOO_SYM_RE.test(name), `invalid ticker: ${JSON.stringify(name)}`);
+  return `\`$"${name}"`;
+}
+
+// A plain integer literal, e.g. for count/window-size args that aren't
+// table/symbol/time data (.util.gw.mon's nRecent/nSlow/winMin/histMin).
+function intLit(n) {
+  assert(Number.isInteger(n), `expected an integer: ${JSON.stringify(n)}`);
+  return String(n);
+}
+
+// A q float literal - e.g. .brk.api.hourly's zCut (a z-score cutoff, not an
+// integer count). q parses a bare digit string as a long int atom, not a
+// float, so a whole-number value needs an explicit `f` suffix to land as
+// the float type the receiving function expects.
+function floatLit(n) {
+  assert(typeof n === "number" && Number.isFinite(n), `expected a finite number: ${JSON.stringify(n)}`);
+  const s = String(n);
+  return /[.e]/i.test(s) ? s : `${s}f`;
+}
+
+// `$"Some Broker Name"  (cast symbol atom literal covering the broker-tag /
+// instrument-symbol shapes the brokerTech.* pages take - letters, digits,
+// spaces, '.', '_', '-'. Broader than SYMBOL_RE/YAHOO_SYM_RE, which don't
+// allow spaces; narrower than a q string literal, which would allow
+// quotes/backslashes this never needs to carry.)
+const CAST_SYM_RE = /^[A-Za-z0-9 ._-]{1,40}$/;
+function castSymbolLit(name) {
+  assert(typeof name === "string" && CAST_SYM_RE.test(name), `invalid symbol: ${JSON.stringify(name)}`);
+  return `\`$"${name}"`;
+}
+
+// The null symbol atom - openQ's "no filter" sentinel for an optional
+// brokerTag/instrument arg (.brk.broker.filterTrades's own convention).
+const NULL_SYM = "`";
 
 // A q timestamp literal: 2026.08.28D12:34:56.789000000
 function timestampLit(v) {
@@ -87,8 +133,11 @@ function buildGwQuery(spec) {
   // `date$(sTime;eTime) for the HDB date clause). Both-null and both-set are
   // fine, so when only one bound is given we materialise the other at the edge
   // of the representable range.
+  // q's timestamp (-12h) is int64 nanoseconds since 2000.01.01 - it overflows
+  // and fails to parse well before year 2999 (max representable is ~2262).
+  // 2200 is comfortably inside range and just as good as "infinity" here.
   const MIN_TS = "2000.01.01D00:00:00.000000000";
-  const MAX_TS = "2999.01.01D00:00:00.000000000";
+  const MAX_TS = "2200.01.01D00:00:00.000000000";
   let sTime = spec.start == null ? NULL : timestampLit(spec.start);
   let eTime = spec.end == null ? NULL : timestampLit(spec.end);
   if (sTime !== NULL && eTime === NULL) eTime = MAX_TS;
@@ -97,6 +146,9 @@ function buildGwQuery(spec) {
   let symb = NULL;
   if (spec.symPattern != null) {
     symb = stringLit(spec.symPattern); // -> `like`
+  } else if (spec.yahooSym != null) {
+    assert(typeof spec.yahooSym === "string", "buildGwQuery takes one sym string; fan out for multiple");
+    symb = yahooSymbolLit(spec.yahooSym); // -> `in` (atom, cast form - see YAHOO_SYM_RE)
   } else if (spec.sym != null) {
     assert(typeof spec.sym === "string", "buildGwQuery takes one sym string; fan out for multiple");
     symb = symbolLit(spec.sym); // -> `in` (atom)
@@ -114,7 +166,13 @@ module.exports = {
   symbolLit,
   symbolVecLit,
   stringLit,
+  yahooSymbolLit,
+  intLit,
+  floatLit,
+  castSymbolLit,
+  NULL_SYM,
   timestampLit,
   buildGwQuery,
   SYMBOL_RE,
+  YAHOO_SYM_RE,
 };

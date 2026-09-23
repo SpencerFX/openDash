@@ -1,7 +1,7 @@
 "use strict";
 
 const { QConnection } = require("jkdb");
-const { buildGwQuery, BadInput } = require("./qlit");
+const { buildGwQuery, symbolLit, intLit, floatLit, castSymbolLit, NULL_SYM, BadInput } = require("./qlit");
 
 // A pool of q IPC connections to the openQ `gw` process.
 //
@@ -203,7 +203,115 @@ class QGateway {
   }
 
   async _one(spec) {
-    const call = buildGwQuery(spec);
+    return this._runCall(buildGwQuery(spec));
+  }
+
+  // Symbol/exchange roster for `table` (see openQ core/gw.q's .oq.gw.symRoster
+  // and core/query.q's .oq.query.symRoster) - the one gw entry point that
+  // isn't the fixed table/cols/time/sym/where shape .oq.gw.query exposes,
+  // called directly as a function rather than through buildGwQuery.
+  async symRoster(table) {
+    return this._runCall(`.oq.gw.symRoster[${symbolLit(table)}]`);
+  }
+
+  // Economic-calendar range query (openQ core/gw.q's .oq.gw.econCal / modules
+  // /ingest/calendar/q/query.q's .oq.query.econCal) - another custom-shaped
+  // gw entry point, like symRoster. Takes already-built q literal strings
+  // (calendar.js's own qDate/qSymList validate+render sD/eD/ctys/imps/cats -
+  // dates aren't a shape buildGwQuery's timestampLit covers, and category
+  // names can contain spaces, which qlit's SYMBOL_RE-based helpers reject)
+  // rather than a spec object, so this is a thin pass-through, not a spec
+  // builder like _one()/query().
+  async econCal(sDLit, eDLit, ctysLit, impsLit, catsLit) {
+    return this._runCall(`.oq.gw.econCal[${sDLit};${eDLit};${ctysLit};${impsLit};${catsLit}]`);
+  }
+
+  // System > Query Mon's own poll (openQ core/utils/gateway.q's .util.gw.mon)
+  // - a self-answering introspection call, not a routed query, so it lives
+  // in .util.gw.* rather than .oq.gw.* (see that function's own header).
+  // nRecent/nSlow/winMin/histMin come from this reader's own fixed config,
+  // never user input, so they're rendered via qlit's intLit rather than a
+  // table/symbol/time literal builder.
+  async mon(nRecent, nSlow, winMin, histMin) {
+    return this._runCall(
+      `.util.gw.mon[${intLit(nRecent)};${intLit(nSlow)};${intLit(winMin)};${intLit(histMin)}]`
+    );
+  }
+
+  // Broker Tech suite (openQ core/gw.q's .oq.gw.brk* / modules/analytics/
+  // brokerTech/api.q's .brk.api.* - one method per /api/brokertech* page).
+  // Routed to the HDB only, same rationale as econCal: retailR_hdb/
+  // brokerTech_hdb are pure batch analytics HDBs with no RDB leg, ever -
+  // this is purely for System > Query Mon visibility/benchmarking. An
+  // empty/falsy brokerTag or symbol string means "no filter" -> NULL_SYM
+  // (openQ's own `.brk.broker.filterTrades` convention), never an empty
+  // q string literal.
+  async brkSuite(lookbackDays, minTrades, topN) {
+    return this._runCall(`.oq.gw.brkSuite[${intLit(lookbackDays)};${intLit(minTrades)};${intLit(topN)}]`);
+  }
+
+  async brkCluster(lookbackDays, k, minTrades) {
+    return this._runCall(`.oq.gw.brkCluster[${intLit(lookbackDays)};${intLit(k)};${intLit(minTrades)}]`);
+  }
+
+  async brkSegment(lookbackDays, minTrades) {
+    return this._runCall(`.oq.gw.brkSegment[${intLit(lookbackDays)};${intLit(minTrades)}]`);
+  }
+
+  async brkCcy(lookbackDays, symbol) {
+    return this._runCall(`.oq.gw.brkCcy[${intLit(lookbackDays)};${castSymbolLit(symbol)}]`);
+  }
+
+  async brkSsi(lookbackDays, topN, drillSymbol) {
+    return this._runCall(`.oq.gw.brkSsi[${intLit(lookbackDays)};${intLit(topN)};${castSymbolLit(drillSymbol)}]`);
+  }
+
+  async brkMargin(lookbackDays, brokerTag) {
+    const bt = brokerTag ? castSymbolLit(brokerTag) : NULL_SYM;
+    return this._runCall(`.oq.gw.brkMargin[${intLit(lookbackDays)};${bt}]`);
+  }
+
+  async brkAiRisk(lookbackDays) {
+    return this._runCall(`.oq.gw.brkAiRisk[${intLit(lookbackDays)}]`);
+  }
+
+  async brkVfdt(lookbackDays) {
+    return this._runCall(`.oq.gw.brkVfdt[${intLit(lookbackDays)}]`);
+  }
+
+  async brkProfit(lookbackDays) {
+    return this._runCall(`.oq.gw.brkProfit[${intLit(lookbackDays)}]`);
+  }
+
+  // dateLit is a pre-validated q date literal string ("2026.08.01") or the
+  // literal text "0Nd" (brokerTech.js's _clampHourly already renders it -
+  // see HOURLY_QUERY's former dateLit param for the same contract).
+  async brkHourly(lookbackDays, lookbackWeeks, testDays, zCut, dateLit) {
+    return this._runCall(
+      `.oq.gw.brkHourly[${intLit(lookbackDays)};${intLit(lookbackWeeks)};${intLit(testDays)};${floatLit(zCut)};${dateLit}]`
+    );
+  }
+
+  async brkVolume(lookbackDays, brokerTag) {
+    const bt = brokerTag ? castSymbolLit(brokerTag) : NULL_SYM;
+    return this._runCall(`.oq.gw.brkVolume[${intLit(lookbackDays)};${bt}]`);
+  }
+
+  async brkChurn(lookbackDays) {
+    return this._runCall(`.oq.gw.brkChurn[${intLit(lookbackDays)}]`);
+  }
+
+  async ttReport(signalId, lookbackDays) {
+    return this._runCall(`.oq.gw.ttReport[${intLit(signalId)};${intLit(lookbackDays)}]`);
+  }
+
+  async ttRoster(lookbackDays, minTrades, topN) {
+    return this._runCall(`.oq.gw.ttRoster[${intLit(lookbackDays)};${intLit(minTrades)};${intLit(topN)}]`);
+  }
+
+  // Run one pre-built ".oq.gw.*[...]" call string through a pooled slot,
+  // matching a reply by queryID the way .query()/._one() already do.
+  async _runCall(call) {
     const slot = await this._acquire();
     const localId = this._nextQueryId++;
     return new Promise((resolve, reject) => {
