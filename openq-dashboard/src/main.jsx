@@ -3191,7 +3191,7 @@ function DeskRisk() {
     </section>
 
     {err && <div className="rounded border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-300">{GW}/api/report — {err}
-      <div className="mt-1 text-rose-400/70">needs the report module running (startupAllByModule.sh report) and OPENQ_REPORT_CEP set.</div></div>}
+      <div className="mt-1 text-rose-400/70">needs report_cep running (startupAllByModule.sh primefinance - report_cep now lives under primefinance's module config) and OPENQ_REPORT_CEP set.</div></div>}
 
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
       <StatTile label="Symbols" value={String(t.syms ?? "—")} sub="in the desk report" icon={ListFilter} accent="#22d3ee"/>
@@ -4144,11 +4144,9 @@ const TABLE_TIERS = {
   eq_m1_yfinance: "Live", eq_hdb: "Live", efxReplay: "Live", fx_hdb: "Live",
   fx_m1_yfinance: "Live", mon_hdb: "Live", primefinance_hdb: "Live", ta_hdb: "Live",
 };
-const TABLE_GROUPS = {
-  eq_m1_yfinance: "yfinance", eq_hdb: "yfinance", efxReplay: "yfinance",
-  eq_m1_yfinance_idb: "yfinance", fx_hdb: "yfinance",
-  fx_m1_yfinance: "yfinance", fx_m1_yfinance_idb: "yfinance",
-};
+// yfinance sources are deliberately NOT grouped under a collapsible
+// sub-header - shown loose within their tier, same as mon.
+const TABLE_GROUPS = {};
 // storage kind for a source when it's offline and /api/tables can't report `role`
 const TABLE_KIND = {
   eq_hdb: "hdb", efxReplay: "hdb", fx_hdb: "hdb",
@@ -5705,8 +5703,10 @@ function SimplePage({title,subtitle,icon:Icon}) {
 
 // ---- Broker Tech (retail FX/CFD brokerage & risk analytics) ---------
 // /api/brokertech -> modules/analytics/brokerTech/brokerTech.q's `.brk.*`
-// suite over brokerTech_hdb (C:/data/retail). Figures are in the dataset's
-// own account currency, uncorrected (no FX feed) - hence "acct ccy".
+// suite over brokerTech_hdb (C:/data/retail). Figures are in
+// USD: myfxbook P&L is converted from each account's own currency (cent accounts
+// /100, monthly <ccy>_usd rates) in brokerTechSourceR.q; mql5 accounts carry no
+// currency field and are assumed USD.
 const BT_TOX_BADGE = {
   LOW: "bg-emerald-950 text-emerald-300", MEDIUM: "bg-cyan-950 text-cyan-300",
   HIGH: "bg-amber-950 text-amber-300", EXTREME: "bg-rose-950 text-rose-300",
@@ -5768,7 +5768,7 @@ function BrokerTech() {
 
   return <div className="space-y-4">
     <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
-      <span className="text-slate-400">retail brokerage &amp; risk · <span className="text-slate-500">brokerTech_hdb (C:/data/retail) · MetaTrader Signals copy-trading · figures in acct ccy</span></span>
+      <span className="text-slate-400">retail brokerage &amp; risk · <span className="text-slate-500">brokerTech_hdb (C:/data/retail) · MetaTrader Signals copy-trading · figures in USD (myfxbook converted, mql5 assumed USD)</span></span>
       <span className="flex overflow-hidden rounded border border-slate-800">
         {[30, 90, 180, 365].map(d => <button key={d} onClick={() => setLookback(d)}
           className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
@@ -5827,7 +5827,7 @@ function BrokerTech() {
 
       <div className="grid gap-3 lg:grid-cols-2">
         <section className="panel p-4">
-          <div className="mb-2 font-semibold">Revenue by instrument <span className="text-xs font-normal text-slate-500">total rev = B-book PnL + fees · acct ccy</span></div>
+          <div className="mb-2 font-semibold">Revenue by instrument <span className="text-xs font-normal text-slate-500">total rev = B-book PnL + fees · USD</span></div>
           <div className="h-64"><ResponsiveContainer width="100%" height="100%">
             <BarChart data={revRows} layout="vertical" margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
               <CartesianGrid stroke="#1e2b36" horizontal={false}/>
@@ -6148,7 +6148,7 @@ function ABBook() {
 
   return <div className="space-y-4">
     <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
-      <span className="text-slate-400">A/B-book routing deep-dive · <span className="text-slate-500">.brk.book.* over brokerTech_hdb (C:/data/retail) · figures in acct ccy</span></span>
+      <span className="text-slate-400">A/B-book routing deep-dive · <span className="text-slate-500">.brk.book.* over brokerTech_hdb (C:/data/retail) · figures in USD (myfxbook converted, mql5 assumed USD)</span></span>
       <span className="flex overflow-hidden rounded border border-slate-800">
         {[30, 90, 180, 365].map(d => <button key={d} onClick={() => setLookback(d)}
           className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
@@ -6208,7 +6208,7 @@ function ABBook() {
         </section>
 
         <section className="panel p-4">
-          <div className="mb-2 font-semibold">Revenue by policy <span className="text-xs font-normal text-slate-500">acct ccy, window total</span></div>
+          <div className="mb-2 font-semibold">Revenue by policy <span className="text-xs font-normal text-slate-500">USD, window total</span></div>
           <div className="h-56"><ResponsiveContainer width="100%" height="100%">
             <BarChart data={revChart} margin={{ top: 4, right: 12, bottom: 4, left: 8 }}>
               <CartesianGrid stroke="#1e2b36" vertical={false}/>
@@ -6414,7 +6414,7 @@ function ToxicAnalysis() {
 
   return <div className="space-y-4">
     <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
-      <span className="text-slate-400">toxic / abusive-trader analysis · <span className="text-slate-500">.brk.tox.* over brokerTech_hdb (C:/data/retail) · figures in acct ccy</span></span>
+      <span className="text-slate-400">toxic / abusive-trader analysis · <span className="text-slate-500">.brk.tox.* over brokerTech_hdb (C:/data/retail) · figures in USD (myfxbook converted, mql5 assumed USD)</span></span>
       <span className="flex overflow-hidden rounded border border-slate-800">
         {[30, 90, 180, 365].map(d => <button key={d} onClick={() => setLookback(d)}
           className={`px-2 py-1 ${lookback === d ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{d}d</button>)}
@@ -8585,6 +8585,8 @@ function ExecutionQuality() {
   const [updated, setUpdated] = useState(null);
   const [lookback, setLookback] = useState(30);
   const [q, setQ] = useState("");
+  const [slipSort, setSlipSort] = useState({ key: "stopHitRatePct", dir: "desc" });
+  const [detailSort, setDetailSort] = useState({ key: "cancelRatePct", dir: "desc" });
 
   const load = useCallback((lb) => {
     fetch(new URL(`/api/brokertech?lookbackDays=${lb}`, GW), { cache: "no-store" })
@@ -8599,11 +8601,42 @@ function ExecutionQuality() {
   const rollup = data?.execRollup || {};
   const rows = data?.execDetail || [];
 
+  // shared sortable-table-header helper: click to sort by that column, click
+  // again to flip direction; numeric columns default to descending (biggest
+  // first), string columns to ascending - same convention as A/B Book's.
+  const sortRows = (list, sort) => {
+    const { key, dir } = sort;
+    const mult = dir === "asc" ? 1 : -1;
+    return [...list].sort((a, b) => {
+      let av = a[key], bv = b[key];
+      if (typeof av === "string" || typeof bv === "string") {
+        av = (av ?? "").toString().toLowerCase(); bv = (bv ?? "").toString().toLowerCase();
+      } else {
+        av = av ?? -Infinity; bv = bv ?? -Infinity;
+      }
+      if (av < bv) return -1 * mult;
+      if (av > bv) return 1 * mult;
+      return 0;
+    });
+  };
+  const makeToggle = (setSort) => (key, defaultDir) => setSort((s) => (s.key === key
+    ? { key, dir: s.dir === "asc" ? "desc" : "asc" }
+    : { key, dir: defaultDir }));
+  const toggleSlipSort = makeToggle(setSlipSort);
+  const toggleDetailSort = makeToggle(setDetailSort);
+  const SortTh = ({ label, sortKey, sort, onToggle, defaultDir = "desc" }) => <th className="px-3 py-2 font-medium">
+    <button onClick={() => onToggle(sortKey, defaultDir)}
+      className={`flex items-center gap-1 hover:text-slate-200 ${sort.key === sortKey ? "text-slate-200" : ""}`}>
+      {label}
+      {sort.key === sortKey && (sort.dir === "asc" ? <ArrowUp size={11}/> : <ArrowDown size={11}/>)}
+    </button>
+  </th>;
+
   const filteredRows = useMemo(() => {
     let out = rows;
     if (q.trim()) { const needle = q.trim().toLowerCase(); out = out.filter(r => (r.name || "").toLowerCase().includes(needle) || (r.brokerTag || "").toLowerCase().includes(needle)); }
-    return [...out].sort((a, b) => (b.cancelRatePct || 0) - (a.cancelRatePct || 0));
-  }, [rows, q]);
+    return sortRows(out, detailSort);
+  }, [rows, q, detailSort]);
 
   const cancelChart = useMemo(() => [...rows].sort((a, b) => (b.cancelRatePct || 0) - (a.cancelRatePct || 0)).slice(0, 15)
     .map(r => ({ name: r.name, cancelRatePct: r.cancelRatePct, nOrders: r.nOrders })), [rows]);
@@ -8617,8 +8650,7 @@ function ExecutionQuality() {
       wLo: Math.max(0, r.p25 - r.p5), box: Math.max(0, r.p75 - r.p25), wHi: Math.max(0, r.p95 - r.p75),
     })), [rows]);
 
-  const slipRows = useMemo(() => [...rows].filter(r => (r.nWithStop || 0) > 0)
-    .sort((a, b) => (b.stopHitRatePct || 0) - (a.stopHitRatePct || 0)), [rows]);
+  const slipRows = useMemo(() => sortRows(rows.filter(r => (r.nWithStop || 0) > 0), slipSort), [rows, slipSort]);
 
   const HoldTT = ({ active, payload }) => {
     if (!active || !payload?.length) return null;
@@ -8719,7 +8751,14 @@ function ExecutionQuality() {
         <div className="border-b border-slate-800 px-4 py-2 font-semibold">Stop-slippage leaderboard <span className="text-xs font-normal text-slate-500">providers with ≥1 stopped trade · sorted by stop-hit rate</span></div>
         <div className="max-h-[36vh] overflow-auto">
           <table className="w-full text-left text-xs">
-            <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Provider", "With stop", "Stopped out", "Stop-hit%", "Avg adverse gap", "Max adverse gap"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>
+              <SortTh label="Provider" sortKey="name" sort={slipSort} onToggle={toggleSlipSort} defaultDir="asc"/>
+              <SortTh label="With stop" sortKey="nWithStop" sort={slipSort} onToggle={toggleSlipSort}/>
+              <SortTh label="Stopped out" sortKey="nStoppedOut" sort={slipSort} onToggle={toggleSlipSort}/>
+              <SortTh label="Stop-hit%" sortKey="stopHitRatePct" sort={slipSort} onToggle={toggleSlipSort}/>
+              <SortTh label="Avg adverse gap" sortKey="avgAdverseGapPx" sort={slipSort} onToggle={toggleSlipSort}/>
+              <SortTh label="Max adverse gap" sortKey="maxAdverseGapPx" sort={slipSort} onToggle={toggleSlipSort}/>
+            </tr></thead>
             <tbody className="tabular-nums">
               {slipRows.map((r, i) => <tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
                 <td className="px-3 py-1.5 text-slate-200"><span className="font-mono text-slate-500">{r.signalId}</span> {r.name}</td>
@@ -8747,7 +8786,22 @@ function ExecutionQuality() {
         </div>
         <div className="max-h-[56vh] overflow-auto">
           <table className="w-full min-w-[1240px] text-left text-xs">
-            <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>{["Provider", "Broker", "Orders", "Executed", "Cancelled", "Cancel%", "Market%", "Limit%", "Stop%", "Hold p50", "<5m%", "With stop", "Stop-hit%", "Tox"].map(h => <th key={h} className="px-3 py-2 font-medium">{h}</th>)}</tr></thead>
+            <thead className="sticky top-0 bg-[#0a121a] text-slate-500"><tr>
+              <SortTh label="Provider" sortKey="name" sort={detailSort} onToggle={toggleDetailSort} defaultDir="asc"/>
+              <SortTh label="Broker" sortKey="brokerTag" sort={detailSort} onToggle={toggleDetailSort} defaultDir="asc"/>
+              <SortTh label="Orders" sortKey="nOrders" sort={detailSort} onToggle={toggleDetailSort}/>
+              <SortTh label="Executed" sortKey="nExecuted" sort={detailSort} onToggle={toggleDetailSort}/>
+              <SortTh label="Cancelled" sortKey="nCancelled" sort={detailSort} onToggle={toggleDetailSort}/>
+              <SortTh label="Cancel%" sortKey="cancelRatePct" sort={detailSort} onToggle={toggleDetailSort}/>
+              <SortTh label="Market%" sortKey="marketPct" sort={detailSort} onToggle={toggleDetailSort}/>
+              <SortTh label="Limit%" sortKey="limitPct" sort={detailSort} onToggle={toggleDetailSort}/>
+              <SortTh label="Stop%" sortKey="stopPct" sort={detailSort} onToggle={toggleDetailSort}/>
+              <SortTh label="Hold p50" sortKey="p50" sort={detailSort} onToggle={toggleDetailSort}/>
+              <SortTh label="<5m%" sortKey="sub5MinPct" sort={detailSort} onToggle={toggleDetailSort}/>
+              <SortTh label="With stop" sortKey="nWithStop" sort={detailSort} onToggle={toggleDetailSort}/>
+              <SortTh label="Stop-hit%" sortKey="stopHitRatePct" sort={detailSort} onToggle={toggleDetailSort}/>
+              <SortTh label="Tox" sortKey="toxScore" sort={detailSort} onToggle={toggleDetailSort}/>
+            </tr></thead>
             <tbody className="tabular-nums">
               {filteredRows.map((r, i) => <tr key={i} className="border-t border-slate-800/60 hover:bg-slate-900/50">
                 <td className="px-3 py-1.5 text-slate-200"><span className="font-mono text-slate-500">{r.signalId}</span> {r.name}</td>
@@ -8978,7 +9032,7 @@ function BookMargin() {
 
   return <div className="space-y-4">
     <section className="panel flex flex-wrap items-center gap-3 p-3 text-xs">
-      <span className="text-slate-400">consolidated book margin · <span className="text-slate-500">.brk.rev.daily{mode !== "raw" ? mode[0].toUpperCase() + mode.slice(1) : ""}/.dailyByInstrument · every provider + underlying brokerage summed together · acct ccy</span></span>
+      <span className="text-slate-400">consolidated book margin · <span className="text-slate-500">.brk.rev.daily{mode !== "raw" ? mode[0].toUpperCase() + mode.slice(1) : ""}/.dailyByInstrument · every provider + underlying brokerage summed together · USD</span></span>
       <span className="flex overflow-hidden rounded border border-slate-800">
         {Object.entries(MODE_CFG).map(([key, c]) => <button key={key} onClick={() => setMode(key)}
           className={`px-2 py-1 ${mode === key ? "bg-slate-800 text-cyan-300" : "text-slate-400 hover:bg-slate-900"}`}>{c.tabLabel}</button>)}

@@ -219,8 +219,12 @@ const config = {
       // eq = the read-only equities HDB (cfg_proc/modules/eq/, one hdb proc,
       // no feeder/eod); startable via startupAllByModule.sh eq. candlePattern
       // = the same shape for the candlePattern table (C:/data/db1/ta), read
-      // by the EQ > Candles page.
-      return v.length ? v : ["mon", "markout", "spread", "primefinance", "report", "eq", "candlePattern"];
+      // by the EQ > Candles page. "report" (the cross-desk report_cep) has
+      // no cfg dir of its own anymore - its cep.json now lives under
+      // cfg_proc/modules/primefinance/report_cep.json, so restarting/
+      // stopping/starting "primefinance" also bounces it; /api/report still
+      // reads it directly by address (OPENQ_REPORT_CEP), unaffected.
+      return v.length ? v : ["mon", "markout", "spread", "primefinance", "eq", "candlePattern"];
     })(),
     monGw: {
       name: str("OPENQ_MONGW_NAME", "mon_gw"),
@@ -741,7 +745,14 @@ const config = {
       // brokertech_dashboard.md) - 45s left too little margin and produced
       // real 504s, especially for historical dates the reader's cache
       // never held.
-      timeoutMs: Math.max(cepTimeoutMs, int("OPENQ_BROKERTECH_TIMEOUT_MS", 90000)),
+      // Bumped 90s -> 180s (2026-10-04): the shared SUITE call (A/B Book,
+      // Broker Tech, Toxic Analysis, Execution Quality - all hit
+      // .brk.api.suite) now profiles at ~90s cold for a 365d window on the
+      // full two-platform roster (8.9M trade rows) even after optimizing
+      // .brk.src.priv.fixProfit's per-row symbol lambda into a distinct-
+      // value lookup (35s -> 5s on that one step alone) - 90s left almost
+      // no margin and produced real 504s on the A/B Book 365d view.
+      timeoutMs: Math.max(cepTimeoutMs, int("OPENQ_BROKERTECH_TIMEOUT_MS", 180000)),
     };
   })(),
 
